@@ -52,16 +52,48 @@
   $('#lightsOn').addEventListener('click', e => {
     document.body.classList.add('lit');
     window.sparkleBurst(e.clientX, e.clientY, 40);
-    setTimeout(() => $('#welcome').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }), 350);
+    window.fluidBurst && window.fluidBurst(24);
+    setTimeout(() => lenis ? lenis.scrollTo('#welcome', { duration: 1.8 }) : $('#welcome').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }), 650);
   });
 
   /* ---------- booking bar appears after the door ---------- */
   const bar = $('.book-bar');
   new IntersectionObserver(([en]) => bar.classList.toggle('show', !en.isIntersecting), { threshold: .25 }).observe($('.door'));
 
-  /* ---------- reveal on scroll ---------- */
-  const rev = new IntersectionObserver(ens => ens.forEach(en => { if (en.isIntersecting) { en.target.classList.add('in'); rev.unobserve(en.target); } }), { threshold: .12 });
-  $$('main section > *').forEach(el => { el.classList.add('reveal'); rev.observe(el); });
+  /* ---------- cinematic scroll: Lenis smooth scrolling + GSAP ScrollTrigger ---------- */
+  let lenis = null;
+  if (window.gsap && window.ScrollTrigger) {
+    gsap.registerPlugin(ScrollTrigger);
+    if (window.Lenis && !reduce) {
+      lenis = new Lenis({ lerp: 0.09, wheelMultiplier: 0.9 });
+      lenis.on('scroll', ScrollTrigger.update);
+      gsap.ticker.add(t => lenis.raf(t * 1000));
+      gsap.ticker.lagSmoothing(0);
+      // pause smooth scroll while the camera try-on is open
+      new MutationObserver(() => document.documentElement.classList.contains('no-scroll') ? lenis.stop() : lenis.start())
+        .observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    }
+    if (!reduce) {
+      // the neon sign drifts back and the glow deepens as you leave the door
+      gsap.to('.door-neon', { scale: 1.12, yPercent: 8, ease: 'none', scrollTrigger: { trigger: '.door', start: 'top top', end: 'bottom top', scrub: true } });
+      gsap.to('.door-content', { yPercent: -30, opacity: 0, ease: 'none', scrollTrigger: { trigger: '.door', start: 'top top', end: '70% top', scrub: true } });
+      gsap.from('.chandelier', { y: -120, opacity: 0, rotate: -6, duration: 1.6, ease: 'elastic.out(1, 0.45)', scrollTrigger: { trigger: '.welcome', start: 'top 85%' } });
+      gsap.from('.logo', { scale: .85, opacity: 0, filter: 'blur(10px)', duration: 1.2, ease: 'power3.out', scrollTrigger: { trigger: '.welcome', start: 'top 80%' } });
+      const groups = [
+        ['.welcome', '.script-line, .lede, .pillars li'], ['.suite', '.h2, .sub, .hotspot-photo'],
+        ['.friends', '.h2, .seg, .seat, .friends-note'], ['.studio', '.studio-head > *'], ['.studio', '.wall-row, .ctl-grid, .studio-cta'],
+        ['.gallery', '.h2, .sub'], ['.menu', '.menu-card'], ['.love', '.h2, .love-list li, .love .btn'],
+        ['.home-care', '.sunflower, .h2, .lede, .care-list li, .home-care .btn'], ['.visit', '.h2, .visit-card']
+      ];
+      groups.forEach(([sec, sel]) => {
+        const els = $$(sel, $(sec) || document).length ? $$(sel, $(sec)) : $$(sel);
+        if (!els.length) return;
+        gsap.from(els, { y: 46, opacity: 0, duration: 1, ease: 'power3.out', stagger: 0.08, scrollTrigger: { trigger: els[0], start: 'top 88%' } });
+      });
+      gsap.from('.tile', { x: 80, opacity: 0, rotate: 3, duration: 1, ease: 'power3.out', stagger: 0.07, scrollTrigger: { trigger: '.strip', start: 'top 85%' } });
+      gsap.fromTo('.stage', { clipPath: 'inset(8% 6% 8% 6% round 40px)' }, { clipPath: 'inset(0% 0% 0% 0% round 32px)', ease: 'none', scrollTrigger: { trigger: '.stage', start: 'top 95%', end: 'top 35%', scrub: true } });
+    }
+  }
 
   /* ---------- suite hotspots ---------- */
   const card = $('#hsCard');
