@@ -274,3 +274,6 @@ html.no-scroll,html.no-scroll body{overflow:hidden}
 .suite-hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);margin:0;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--pink-deep);background:rgba(255,255,255,.65);padding:6px 12px;border-radius:999px;z-index:4;animation:breathe 3s ease-in-out infinite;pointer-events:none}
 .suite.immersive .suite-photos{display:none}
 .suite-stage:not(.ready) .suite-views,.suite-stage:not(.ready) .suite-hint{opacity:0}
+.suite-hint .finger{display:inline-block;font-size:16px;margin-right:6px;animation:swipe 1.8s ease-in-out infinite}
+@keyframes swipe{0%,100%{transform:translateX(-10px) rotate(-8deg)}50%{transform:translateX(10px) rotate(8deg)}}
+.suite-stage.touched .suite-hint{opacity:0;transition:opacity .6s}

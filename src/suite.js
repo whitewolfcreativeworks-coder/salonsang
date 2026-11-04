@@ -16,7 +16,7 @@ const VIEWS = [
   { img: 'suite-desk-hd.webp', depth: 'suite-desk-depth.png' },
   { img: 'suite-pedicure-hd.webp', depth: 'suite-pedicure-depth.png' }
 ];
-const PANEL_H = 4.6, PANEL_W = PANEL_H * 0.75, DIST = 4.0, RELIEF = 1.25;
+const PANEL_H = 4.6, PANEL_W = PANEL_H * 0.75, DIST = 4.0, RELIEF = 1.55;
 const HALF = Math.atan((PANEL_W / 2) / DIST);   // angular half-width of one panel
 const YAWS = [HALF, -HALF];                     // desk on the left, chair on the right: they meet in a corner
 
@@ -74,7 +74,7 @@ export function createSuite(container, hotspots) {
         void main(){
           vec4 c = texture2D(uMap, vUv);
           // feather the outer edges into the glow; keep the corner seam crisp
-          float outer = uSide > 0.0 ? smoothstep(0.0, 0.08, vUv.x) : smoothstep(1.0, 0.92, vUv.x);
+          float outer = uSide > 0.0 ? smoothstep(0.0, 0.04, vUv.x) : smoothstep(1.0, 0.96, vUv.x);
           float tb = smoothstep(0.0, 0.05, vUv.y) * smoothstep(1.0, 0.95, vUv.y);
           // depth fog: far wall a touch softer, near things pop
           c.rgb = mix(c.rgb * 0.94 + 0.06, c.rgb * 1.04, vD);
@@ -136,36 +136,46 @@ export function createSuite(container, hotspots) {
   composer.addPass(lens);
   composer.addPass(new OutputPass());
 
-  // ---------- look-around controls ----------
-  const look = { yaw: YAWS[0] * 0.9, pitch: 0, ty: YAWS[0] * 0.9, tp: 0 };
-  let YAW_MAX = YAWS[0] * 1.15, YAW_MIN = -YAW_MAX; const PITCH = 0.2;
-  let drag = null, lastInput = 0, autoT = 0;
-  const el = renderer.domElement;
-  el.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, yaw: look.ty, pitch: look.tp }; lastInput = performance.now(); });
-  addEventListener('pointermove', e => {
-    if (!drag) return;
-    const w = el.clientWidth;
-    look.ty = clamp(drag.yaw + (e.clientX - drag.x) / w * 1.6, YAW_MIN, YAW_MAX);
-    if (e.pointerType === 'mouse') look.tp = clamp(drag.pitch + (e.clientY - drag.y) / w * 1.2, -PITCH, PITCH);
-    lastInput = performance.now();
+  // ---------- touch & slide: like a 3D photo ----------
+  // `slide` runs from -1 (desk side) to +1 (chair side). Your finger drives it directly,
+  // it keeps a little momentum when you let go, and phone tilt adds a gentle extra wobble.
+  let YAW_MAX = YAWS[0] * 1.15, YAW_MIN = -YAW_MAX; const PITCH = 0.16;
+  const look = { slide: -0.6, target: -0.6, vel: 0, pitch: 0, tp: 0, tilt: 0 };
+  let drag = null, lastInput = performance.now(), idleT = 0, touched = false;
+  container.addEventListener('pointerdown', e => {
+    if (e.target.closest('.hs, .suite-views')) return;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, start: look.target, lastX: e.clientX, lastT: performance.now() };
+    try { container.setPointerCapture(e.pointerId); } catch (_) {}
+    look.vel = 0; lastInput = performance.now();
+    if (!touched) { touched = true; container.classList.add('touched'); }
   });
-  addEventListener('pointerup', () => { drag = null; });
-  addEventListener('pointercancel', () => { drag = null; });
-  el.addEventListener('mousemove', e => {
-    if (drag) return;
-    const r = el.getBoundingClientRect();
-    look.tp = clamp(-((e.clientY - r.top) / r.height - 0.5) * PITCH * 1.4, -PITCH, PITCH);
+  container.addEventListener('pointermove', e => {
+    if (drag && e.pointerId === drag.id) {
+      const w = container.clientWidth;
+      // drag right to look left, like pushing the photo
+      look.target = clamp(drag.start - (e.clientX - drag.x) / (w * 0.42), -1, 1);
+      const now = performance.now(), dt = Math.max(1, now - drag.lastT);
+      look.vel = -(e.clientX - drag.lastX) / (w * 0.42) / dt * 16;
+      drag.lastX = e.clientX; drag.lastT = now;
+      if (e.pointerType === 'mouse') look.tp = clamp(-(e.clientY - drag.y) / w * 0.6, -PITCH, PITCH);
+      lastInput = now;
+    } else if (e.pointerType === 'mouse') {
+      const r = container.getBoundingClientRect();
+      look.tp = clamp(-((e.clientY - r.top) / r.height - 0.5) * PITCH * 1.2, -PITCH, PITCH);
+    }
   });
+  const release = e => { if (drag && (!e || e.pointerId === drag.id)) { drag = null; lastInput = performance.now(); } };
+  container.addEventListener('pointerup', release);
+  container.addEventListener('pointercancel', release);
+  container.addEventListener('lostpointercapture', release);
   let gyroBase = null;
   addEventListener('deviceorientation', e => {
     if (e.gamma == null || !visible) return;
-    if (!gyroBase) gyroBase = { g: e.gamma, b: e.beta };
-    if (performance.now() - lastInput < 1500) { gyroBase = { g: e.gamma - (look.ty - YAWS[0] * 0.9) * -40, b: e.beta }; return; }
-    look.ty = clamp(YAWS[0] * 0.9 - (e.gamma - gyroBase.g) / 40, YAW_MIN, YAW_MAX);
-    look.tp = clamp((e.beta - gyroBase.b) / 120, -PITCH, PITCH);
-    lastInput = performance.now() - 1200;
+    if (!gyroBase) gyroBase = e.gamma;
+    gyroBase += (e.gamma - gyroBase) * 0.01; // slowly re-centre so it never fights your finger
+    look.tilt = clamp((e.gamma - gyroBase) / 25, -1, 1) * 0.22;
   });
-  function goTo(i) { look.ty = clamp(YAWS[i] * 0.9, YAW_MIN, YAW_MAX); look.tp = 0; lastInput = performance.now() + 2500; }
+  function goTo(i) { look.target = i === 0 ? -0.75 : 0.75; look.vel = 0; lastInput = performance.now() + 4000; }
 
   // ---------- 3D-anchored sparkle hotspots ----------
   const spots = hotspots.map(h => {
@@ -207,18 +217,18 @@ export function createSuite(container, hotspots) {
   function frame(now) {
     if (!running) return;
     const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
-    // gentle drift across the room when nobody is touching
-    if (!reduceMotion && performance.now() - lastInput > 6000 && !drag) {
-      autoT += dt * 0.16;
-      look.ty = YAW_MAX * 0.92 * Math.cos(autoT);
-      look.tp = Math.sin(autoT * 1.7) * 0.05;
+    // momentum after a flick, then a slow idle sway if nobody touches for a while
+    if (!drag) {
+      if (Math.abs(look.vel) > 0.0005) { look.target = clamp(look.target + look.vel * dt * 60 * 0.06, -1, 1); look.vel *= Math.pow(0.04, dt); }
+      if (!reduceMotion && performance.now() - lastInput > 8000) { idleT += dt * 0.22; look.target += (Math.sin(idleT) * 0.7 - look.target) * dt * 0.4; }
     }
-    const ease = 1 - Math.pow(0.002, dt);
-    look.yaw += (look.ty - look.yaw) * ease;
+    const ease = 1 - Math.pow(drag ? 0.00001 : 0.004, dt);
+    look.slide += (clamp(look.target + look.tilt, -1, 1) - look.slide) * ease;
     look.pitch += (look.tp - look.pitch) * ease;
-    // parallax: the head moves a little as you look, revealing depth around the chair and desk
-    camera.position.set(-look.yaw * 0.55, look.pitch * 0.8, 0.35);
-    camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+    const yaw = -look.slide * YAW_MAX * 0.78;
+    // strong sideways head movement = the 3D-photo parallax effect
+    camera.position.set(look.slide * 0.7, look.pitch * 0.8, 0.45);
+    camera.rotation.set(look.pitch, yaw, 0, 'YXZ');
     reveal = Math.min(1, reveal + dt * 0.9);
     const e = 1 - Math.pow(1 - reveal, 3);
     panels.forEach(p => { p.material.uniforms.uReveal.value = e; });
@@ -228,7 +238,7 @@ export function createSuite(container, hotspots) {
     composer.render(dt);
     placeSpots();
     // which view are we closer to?
-    container.dispatchEvent(new CustomEvent('suiteview', { detail: look.yaw > 0 ? 0 : 1 }));
+    container.dispatchEvent(new CustomEvent('suiteview', { detail: look.slide < 0 ? 0 : 1 }));
     requestAnimationFrame(frame);
   }
   function resize() {
@@ -242,7 +252,6 @@ export function createSuite(container, hotspots) {
     const hf = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect);
     YAW_MAX = Math.max(0.06, 2 * HALF - hf / 2 * 0.86);
     YAW_MIN = -YAW_MAX;
-    look.ty = clamp(look.ty, YAW_MIN, YAW_MAX); look.yaw = clamp(look.yaw, YAW_MIN, YAW_MAX);
   }
   function start() { if (running || !visible || document.hidden) return; running = true; last = performance.now(); requestAnimationFrame(frame); }
   function stop() { running = false; }
