@@ -133,7 +133,7 @@ export function createStudio(container, { onReady, onTip } = {}) {
       g.font = '104px "Great Vibes", cursive'; g.fillText('Sang Whitewolf', 640, 190);
       g.strokeStyle = '#7b2d1e'; g.lineWidth = 2; g.beginPath(); g.moveTo(410, 250); g.lineTo(500, 250); g.moveTo(780, 250); g.lineTo(870, 250); g.stroke();
       g.font = '600 34px "Cormorant Garamond", serif'; g.fillText('N A I L   A R T I S T', 640, 262);
-      g.font = '500 44px "Cormorant Garamond", serif'; g.fillText('530-648-4977', 640, 370); g.fillText('sang.nails@proton.me', 640, 432);
+      g.font = '500 44px "Cormorant Garamond", serif'; g.fillText('530-648-4977', 640, 370); g.fillText('salonsang.com', 640, 432);
       g.beginPath(); g.arc(640, 492, 6, 0, 7); g.fill(); g.beginPath(); g.moveTo(540, 492); g.lineTo(620, 492); g.moveTo(660, 492); g.lineTo(740, 492); g.stroke();
       tex.needsUpdate = true;
     };

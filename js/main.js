@@ -99,16 +99,15 @@
   const card = $('#hsCard');
   let openBtn = null;
   function closeCard() { card.hidden = true; if (openBtn) openBtn.setAttribute('aria-expanded', 'false'); openBtn = null; }
-  $$('.hs').forEach(b => {
-    b.setAttribute('aria-expanded', 'false');
-    b.setAttribute('aria-label', b.dataset.title);
-    b.addEventListener('click', e => {
-      if (openBtn === b) return closeCard();
-      if (openBtn) openBtn.setAttribute('aria-expanded', 'false');
-      $('#hsTitle').textContent = b.dataset.title; $('#hsText').textContent = b.dataset.text;
-      card.hidden = false; b.setAttribute('aria-expanded', 'true'); openBtn = b;
-      window.sparkleBurst(e.clientX, e.clientY, 14);
-    });
+  $$('.hs').forEach(b => { b.setAttribute('aria-expanded', 'false'); b.setAttribute('aria-label', b.dataset.title); });
+  // delegated so the 3D suite's floating hotspots work too
+  document.addEventListener('click', e => {
+    const b = e.target.closest('.hs'); if (!b) return;
+    if (openBtn === b) return closeCard();
+    if (openBtn) openBtn.setAttribute('aria-expanded', 'false');
+    $('#hsTitle').textContent = b.dataset.title; $('#hsText').textContent = b.dataset.text;
+    card.hidden = false; b.setAttribute('aria-expanded', 'true'); openBtn = b;
+    window.sparkleBurst(e.clientX, e.clientY, 14);
   });
   $('.hs-close').addEventListener('click', closeCard);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeCard(); closeLb(); } });

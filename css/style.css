@@ -258,3 +258,19 @@ html.no-scroll,html.no-scroll body{overflow:hidden}
   *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
   .reveal{opacity:1;transform:none}
 }
+
+/* ---------- immersive 3D suite ---------- */
+.suite-stage{position:relative;width:min(1100px,100%);height:min(72svh,680px);min-height:440px;margin:0 auto 18px;overflow:hidden;touch-action:pan-y;-webkit-user-select:none;user-select:none;cursor:grab;background:radial-gradient(ellipse at 50% 45%,#fff6f8,#f3d3de)}
+.suite-stage:active{cursor:grabbing}
+@media (min-width:760px){.suite-stage{width:calc(100% - 40px);border-radius:999px/180px;box-shadow:0 30px 80px rgba(176,42,98,.18),inset 0 0 0 1px rgba(255,255,255,.6)}}
+@media (max-width:759px){.suite-stage{border-radius:28px;width:calc(100% - 20px)}}
+.suite-canvas{position:absolute;inset:0;width:100%!important;height:100%!important;opacity:0;transition:opacity 1.4s}
+.suite-stage.ready .suite-canvas{opacity:1}
+.suite-stage.ready .stage-loading{opacity:0;pointer-events:none}
+.suite-stage .hs3d{position:absolute;left:0;top:0;--x:0;--y:0;transition:opacity .4s;z-index:3}
+.suite-views{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;gap:4px;padding:4px;border-radius:999px;background:rgba(255,255,255,.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);z-index:4;box-shadow:0 6px 18px rgba(176,42,98,.15)}
+.suite-views button{border:0;background:none;border-radius:999px;padding:8px 14px;font-size:14px;font-weight:600;color:var(--ink-soft)}
+.suite-views button.on{background:var(--pink);color:#fff}
+.suite-hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);margin:0;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--pink-deep);background:rgba(255,255,255,.65);padding:6px 12px;border-radius:999px;z-index:4;animation:breathe 3s ease-in-out infinite;pointer-events:none}
+.suite.immersive .suite-photos{display:none}
+.suite-stage:not(.ready) .suite-views,.suite-stage:not(.ready) .suite-hint{opacity:0}

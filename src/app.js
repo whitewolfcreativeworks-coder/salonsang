@@ -128,3 +128,30 @@ $('#tryOnBtn').addEventListener('click', async () => {
 });
 tryRoot.querySelector('.to-close').addEventListener('click', () => tryMod && tryMod.closeTryOn(tryRoot));
 tryRoot.querySelector('.to-flip').addEventListener('click', () => tryMod && tryMod.flipCamera(tryRoot));
+
+// ---------- immersive 3D suite ----------
+const suiteStage = $('#suiteStage');
+if (suiteStage) {
+  const spots = [];
+  $$('.suite-photos .hotspot-photo').forEach((fig, view) => {
+    $$('.hs', fig).forEach(b => {
+      const x = parseFloat(b.style.getPropertyValue('--x')) / 100, y = parseFloat(b.style.getPropertyValue('--y')) / 100;
+      spots.push({ view, u: x, v: 1 - y, title: b.dataset.title, text: b.dataset.text });
+    });
+  });
+  let suite = null;
+  const sio = new IntersectionObserver(async ([en]) => {
+    if (!en.isIntersecting || suite) return;
+    sio.disconnect();
+    const { createSuite } = await import('./suite.js');
+    suite = createSuite(suiteStage, spots);
+    if (!suite) { suiteStage.remove(); return; }
+    suiteStage.classList.add('ready');
+    $('.suite').classList.add('immersive');
+  }, { rootMargin: '500px' });
+  sio.observe(suiteStage);
+  $$('.suite-views button', suiteStage).forEach(b => b.addEventListener('click', () => suite && suite.goTo(+b.dataset.view)));
+  suiteStage.addEventListener('suiteview', e => {
+    $$('.suite-views button', suiteStage).forEach(b => b.classList.toggle('on', +b.dataset.view === e.detail));
+  });
+}
