@@ -369,14 +369,14 @@ export function createChandelier(holder) {
   canvas.addEventListener('pointerdown', e => {
     const r = canvas.getBoundingClientRect();
     const dx = (e.clientX - r.left) / r.width - 0.5;
-    impulse(0.05 * (Math.random() - 0.5), -0.22 * Math.sign(dx || 1) * (0.5 + Math.abs(dx)), 0.5 * dx);
+    impulse(0.02 * (Math.random() - 0.5), -0.08 * Math.sign(dx || 1) * (0.5 + Math.abs(dx)), 0.25 * dx);
     for (let i = 0; i < 6; i++) setTimeout(() => spawnGlint(true), i * 70);
     lastX = e.clientX;
   });
   canvas.addEventListener('pointermove', e => {
     if (e.pointerType === 'mouse' && e.buttons === 0) {
       // hovering with a mouse: tiny breeze
-      if (lastX !== null) impulse(0, -(e.clientX - lastX) * 0.0012, 0);
+      if (lastX !== null) impulse(0, -(e.clientX - lastX) * 0.0005, 0);
       lastX = e.clientX;
     }
   });
@@ -392,7 +392,7 @@ export function createChandelier(holder) {
     const upd = (mesh, list) => {
       list.forEach((d, k) => {
         o.position.copy(d.p);
-        o.rotation.set(Math.sin(t * 1.3 + d.ph) * d.a - sw.x * 0.6, d.ry + Math.sin(t * 0.7 + d.ph) * 0.25, Math.cos(t * 1.1 + d.ph) * d.a * 0.6 - sw.z * 0.6);
+        o.rotation.set(Math.sin(t * 1.3 + d.ph) * d.a - sw.x * 1.2, d.ry + Math.sin(t * 0.7 + d.ph) * 0.3, Math.cos(t * 1.1 + d.ph) * d.a * 0.6 - sw.z * 1.2);
         o.updateMatrix(); mesh.setMatrixAt(k, o.matrix);
       });
       mesh.instanceMatrix.needsUpdate = true;
@@ -407,10 +407,10 @@ export function createChandelier(holder) {
     crystalU.uTime.value = t;
     // damped springs back to a soft idle drift
     const k = 5.5, damp = 1.1;
-    const idleX = Math.sin(t * 0.55) * 0.012, idleZ = Math.sin(t * 0.43 + 1) * 0.018 + tilt * 0.03;
+    const idleX = Math.sin(t * 0.32) * 0.004, idleZ = Math.sin(t * 0.26 + 1) * 0.006 + tilt * 0.012;   // the body barely sways
     sw.vx += (-(sw.x - idleX) * k - sw.vx * damp) * dt; sw.x += sw.vx * dt;
     sw.vz += (-(sw.z - idleZ) * k - sw.vz * damp) * dt; sw.z += sw.vz * dt;
-    const idleTw = Math.sin(t * 0.21) * 0.45;
+    const idleTw = Math.sin(t * 0.11) * 0.22;                                        // slow, small turn
     sw.vtw += (-(sw.tw - idleTw) * 0.9 - sw.vtw * 0.6) * dt; sw.tw += sw.vtw * dt;
     root.rotation.set(sw.x, 0, sw.z);
     body.rotation.y = sw.tw;
@@ -423,7 +423,7 @@ export function createChandelier(holder) {
     warm.intensity = 2.0 + 0.15 * Math.sin(t * 6.1);
     // rainbow flecks drift as the chandelier turns, like light thrown through the prisms
     flecks.forEach(f => {
-      const u = f.userData, a = u.a + sw.tw * 2.2;
+      const u = f.userData, a = u.a + sw.tw * 3.5 + t * 0.03;
       f.position.set(Math.cos(a) * u.r * 1.25, top + u.y + sw.z * 0.4, -0.9);
       const tw = 0.5 + 0.5 * Math.sin(t * 0.9 + u.ph);
       f.material.opacity = 0.16 + 0.24 * tw * Math.max(0, Math.cos(a * 0.5));
