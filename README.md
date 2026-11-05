@@ -7,6 +7,7 @@ It's an "experience" site, not a booking site: every path ends with **call or te
 - `index.html`: the page (neon + fluid entrance, suite tour, bring-your-friends, 3D nail studio, try-on, gallery, menu, home care, visit)
 - `src/`: source for the interactive studio (bundled into `js/build/` with esbuild)
   - `neon.js`: live neon sign. Glass tubes traced from Sang's real sign (scikit-image skeleton → `images/neon-tubes.json`), gas-fill ignition and flicker, warm light spill on the wall (`images/neon-room.webp`, `neon-spill.png`), HDR mipmap bloom via pmndrs/postprocessing
+  - `chandelier.js`: tiny 3D crystal chandelier in the welcome section. Procedural gold frame, candle bulbs, bead swags and pendalogue drops; cut-crystal shader with rainbow dispersion; gentle sway, twist and star glints; tap to swing it. Falls back to the SVG drawing without WebGL2
   - `studio.js`: three.js 3D hand on white fur, brush painting, finishes and shaders, crystals, bloom
   - `tryon.js`: live camera try-on with MediaPipe Hand Landmarker
   - `app.js`, `state.js`: controls and the shared design ("Text this design to Sang")

@@ -69,6 +69,13 @@ body.lit .door::after{content:"";position:absolute;inset:0;background:var(--crea
 /* ---------- welcome ---------- */
 .welcome{position:relative;padding-top:20px}
 .chandelier{display:flex;justify-content:center;margin:-20px 0 6px;transform-origin:50% 0;animation:sway 7s ease-in-out infinite}
+.chandelier{position:relative}
+.chandelier::before{content:"";position:absolute;left:50%;top:58%;width:min(330px,82vw);aspect-ratio:1;transform:translate(-50%,-50%);border-radius:50%;
+  background:radial-gradient(circle,rgba(255,214,160,.38) 0%,rgba(255,200,215,.22) 38%,rgba(255,220,230,0) 70%);pointer-events:none;opacity:0;transition:opacity 1.4s ease}
+.chandelier.live{animation:none;margin:-20px 0 -30px}
+.chandelier.live::before{opacity:1}
+.chandelier.live>svg{display:none}
+.chand-gl{position:relative;display:block;width:min(280px,72vw);aspect-ratio:1/1;touch-action:pan-y;cursor:pointer;-webkit-tap-highlight-color:transparent}
 @keyframes sway{0%,100%{transform:rotate(-1.2deg)}50%{transform:rotate(1.2deg)}}
 .chandelier .cr{fill:#f3f7ff;stroke:#c9d6ee;stroke-width:1;animation:glint 2.8s ease-in-out infinite}
 .chandelier .cr:nth-child(2n){animation-delay:.7s}.chandelier .cr:nth-child(3n){animation-delay:1.4s}

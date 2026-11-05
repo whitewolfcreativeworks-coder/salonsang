@@ -14,6 +14,20 @@ if (neonCanvas) {
   }).catch(() => neonCanvas.remove());
 }
 
+// ---------- crystal chandelier (welcome section, loads as it nears view) ----------
+const chand = $('.chandelier');
+if (chand) {
+  const cio = new IntersectionObserver(([en]) => {
+    if (!en.isIntersecting) return;
+    cio.disconnect();
+    import('./chandelier.js').then(({ createChandelier }) => {
+      const c = createChandelier(chand);
+      if (c) { chand.classList.add('live'); window.chandelierSparkle = c.sparkle; }
+    }).catch(() => {});
+  }, { rootMargin: '600px' });
+  cio.observe(chand);
+}
+
 const stage = $('#stage');
 const tipEl = $('#stageTip');
 const tip = t => { tipEl.textContent = t; tipEl.classList.remove('flash'); void tipEl.offsetWidth; tipEl.classList.add('flash'); };
