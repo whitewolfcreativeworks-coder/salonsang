@@ -19,7 +19,12 @@ const VIEWS = [
 const PANEL_H = 4.6, PANEL_W = PANEL_H * 0.75, DIST = 4.0, RELIEF = 1.55;
 const HALF = Math.atan((PANEL_W / 2) / DIST);   // angular half-width of one panel
 // real highlights in each photo (polish shelf lights, glass cabinet, chair gold, desk edge), found offline
-const HIGHLIGHTS = [[[0.262, 0.128], [0.078, 0.323], [0.352, 0.25], [0.279, 0.256], [0.772, 0.119], [0.675, 0.132], [0.527, 0.141], [0.745, 0.234], [0.854, 0.23], [0.554, 0.243], [0.614, 0.241], [0.835, 0.343], [0.147, 0.322], [0.613, 0.135], [0.132, 0.602], [0.296, 0.602], [0.448, 0.606], [0.819, 0.437], [0.674, 0.237], [0.397, 0.144], [0.925, 0.227], [0.16, 0.644], [0.381, 0.604], [0.201, 0.601], [0.876, 0.675], [0.466, 0.145]], [[0.144, 0.58], [0.334, 0.346], [0.181, 0.637], [0.128, 0.522], [0.238, 0.526], [0.204, 0.579], [0.057, 0.637], [0.486, 0.556], [0.078, 0.49], [0.073, 0.579], [0.446, 0.694], [0.238, 0.356], [0.631, 0.385], [0.171, 0.17], [0.743, 0.215], [0.161, 0.041], [0.154, 0.475], [0.246, 0.466], [0.371, 0.417], [0.91, 0.211], [0.833, 0.235], [0.3, 0.403], [0.078, 0.716], [0.188, 0.424], [0.152, 0.097], [0.141, 0.325]]];
+const HIGHLIGHTS_RAW = [[[0.262, 0.128], [0.078, 0.323], [0.352, 0.25], [0.279, 0.256], [0.772, 0.119], [0.675, 0.132], [0.527, 0.141], [0.745, 0.234], [0.854, 0.23], [0.554, 0.243], [0.614, 0.241], [0.835, 0.343], [0.147, 0.322], [0.613, 0.135], [0.132, 0.602], [0.296, 0.602], [0.448, 0.606], [0.819, 0.437], [0.674, 0.237], [0.397, 0.144], [0.925, 0.227], [0.16, 0.644], [0.381, 0.604], [0.201, 0.601], [0.876, 0.675], [0.466, 0.145]], [[0.144, 0.58], [0.334, 0.346], [0.181, 0.637], [0.128, 0.522], [0.238, 0.526], [0.204, 0.579], [0.057, 0.637], [0.486, 0.556], [0.078, 0.49], [0.073, 0.579], [0.446, 0.694], [0.238, 0.356], [0.631, 0.385], [0.171, 0.17], [0.743, 0.215], [0.161, 0.041], [0.154, 0.475], [0.246, 0.466], [0.371, 0.417], [0.91, 0.211], [0.833, 0.235], [0.3, 0.403], [0.078, 0.716], [0.188, 0.424], [0.152, 0.097], [0.141, 0.325]]];
+// The chair photo is trimmed at 94% (its right edge showed a sliver of the rolling cart that the
+// desk photo shows whole), so that wall is a little narrower; it still meets the desk wall in the corner.
+const WIDTHS = [PANEL_W, PANEL_W * 0.94];
+const TRIM = [1, 0.94];
+const HIGHLIGHTS = HIGHLIGHTS_RAW.map((l, i) => l.map(([u, v]) => [u / TRIM[i], v]).filter(([u]) => u < 0.98));
 const YAWS = [-HALF, HALF];                     // chair on the left, desk on the right (as in the real suite): they meet in a corner
 
 export function createSuite(container, hotspots) {
@@ -55,7 +60,7 @@ export function createSuite(container, hotspots) {
   const panels = VIEWS.map((v, i) => {
     const tex = loader.load(base + v.img); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
     const dtex = loader.load(base + v.depth, t => readDepth(t.image, i));
-    const geo = new THREE.PlaneGeometry(PANEL_W, PANEL_H, isPhone ? 180 : 260, isPhone ? 240 : 346);
+    const geo = new THREE.PlaneGeometry(WIDTHS[i], PANEL_H, isPhone ? 180 : 260, isPhone ? 240 : 346);
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       uniforms: { uMap: { value: tex }, uDepth: { value: dtex }, uRelief: { value: RELIEF }, uSide: { value: Math.sign(YAWS[i]) }, uReveal: { value: 0 } },
@@ -89,8 +94,10 @@ export function createSuite(container, hotspots) {
     const mesh = new THREE.Mesh(geo, mat);
     // place on an arc around the viewer, facing in
     const yaw = YAWS[i];
-    mesh.position.set(-Math.sin(yaw) * DIST, 0, -Math.cos(yaw) * DIST);
-    mesh.lookAt(0, 0, 0);
+    // hinge each wall on the shared corner so walls of different widths still meet exactly
+    const sgn = Math.sign(yaw), c = Math.cos(HALF), sn = Math.sin(HALF), w2 = WIDTHS[i] / 2;
+    mesh.position.set(-sgn * c * w2, 0, -DIST / c + sn * w2);
+    mesh.rotation.y = yaw;
     scene.add(mesh);
     return mesh;
   });
@@ -144,7 +151,7 @@ export function createSuite(container, hotspots) {
   // ---------- touch & slide: like a 3D photo ----------
   // `slide` runs from -1 (chair side, left) to +1 (desk side, right). Your finger drives it directly,
   // it keeps a little momentum when you let go, and phone tilt adds a gentle extra wobble.
-  let YAW_MAX = HALF * 1.15, YAW_MIN = -YAW_MAX; const PITCH = 0.16;
+  let YAW_MAX = HALF * 1.15, YAW_LEFT = YAW_MAX; const PITCH = 0.16;
   const look = { slide: 0.6, target: 0.6, vel: 0, pitch: 0, tp: 0, tilt: 0 };
   let drag = null, lastInput = performance.now(), idleT = 0, touched = false;
   container.addEventListener('pointerdown', e => {
@@ -209,7 +216,7 @@ export function createSuite(container, hotspots) {
     const view = Math.random() < 0.8 ? (look.slide < 0 ? 1 : 0) : (look.slide < 0 ? 0 : 1);
     const list = HIGHLIGHTS[view], [u, v] = list[(Math.random() * list.length) | 0];
     const p = panels[view], d = depthAt(view, u, v);
-    g.sp.position.set((u - 0.5) * PANEL_W, (v - 0.5) * PANEL_H, (d - 0.25) * RELIEF * p.material.uniforms.uReveal.value + 0.05).applyMatrix4(p.matrixWorld);
+    g.sp.position.set((u - 0.5) * WIDTHS[view], (v - 0.5) * PANEL_H, (d - 0.25) * RELIEF * p.material.uniforms.uReveal.value + 0.05).applyMatrix4(p.matrixWorld);
     g.t = 0; g.life = 0.7 + Math.random() * 0.6; g.size = 0.16 + Math.random() * 0.14; g.rot = Math.random() * 0.5;
     g.sp.visible = true;
   }
@@ -256,6 +263,7 @@ export function createSuite(container, hotspots) {
   scene.add(flakes);
 
   // ---------- 3D-anchored sparkle hotspots ----------
+  hotspots = hotspots.map(h => ({ ...h, u: h.u / TRIM[h.view] })).filter(h => h.u < 0.98);
   const spots = hotspots.map(h => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'hs hs3d'; b.textContent = '✦';
@@ -268,7 +276,7 @@ export function createSuite(container, hotspots) {
     spots.forEach(s => {
       const p = panels[s.view];
       const d = depthAt(s.view, s.u, s.v);
-      const local = new THREE.Vector3((s.u - 0.5) * PANEL_W, (s.v - 0.5) * PANEL_H, (d - 0.25) * RELIEF * p.material.uniforms.uReveal.value + 0.02);
+      const local = new THREE.Vector3((s.u - 0.5) * WIDTHS[s.view], (s.v - 0.5) * PANEL_H, (d - 0.25) * RELIEF * p.material.uniforms.uReveal.value + 0.02);
       s.world.copy(local).applyMatrix4(p.matrixWorld);
       const v = s.world.clone().project(camera);
       // apply the same fisheye mapping as the lens so dots stay glued to objects
@@ -303,7 +311,7 @@ export function createSuite(container, hotspots) {
     const ease = 1 - Math.pow(drag ? 0.00001 : 0.004, dt);
     look.slide += (clamp(look.target + look.tilt, -1, 1) - look.slide) * ease;
     look.pitch += (look.tp - look.pitch) * ease;
-    const yaw = -look.slide * YAW_MAX * 0.78;
+    const yaw = -look.slide * (look.slide < 0 ? YAW_LEFT : YAW_MAX) * 0.78;
     // strong sideways head movement = the 3D-photo parallax effect
     camera.position.set(look.slide * 0.7, look.pitch * 0.8, 0.45);
     camera.rotation.set(look.pitch, yaw, 0, 'YXZ');
@@ -341,8 +349,10 @@ export function createSuite(container, hotspots) {
     lens.uniforms.uAspect.value = w / h;
     // only let the view travel as far as the photos reach
     const hf = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect);
-    YAW_MAX = Math.max(0.06, 2 * HALF - hf / 2 * 0.86);
-    YAW_MIN = -YAW_MAX;
+    // outer-edge angle of each wall (the left, chair wall is a touch narrower)
+    const edgeAng = w => { const c = Math.cos(HALF), sn = Math.sin(HALF); return Math.atan2(c * w, DIST / c - sn * w); };
+    YAW_MAX = Math.max(0.06, edgeAng(WIDTHS[0]) - hf / 2 * 0.86);
+    YAW_LEFT = Math.max(0.06, edgeAng(WIDTHS[1]) - hf / 2 * 0.86);
   }
   function start() { if (running || !visible || document.hidden) return; running = true; last = performance.now(); requestAnimationFrame(frame); }
   function stop() { running = false; }
