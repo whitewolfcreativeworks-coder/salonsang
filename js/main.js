@@ -71,8 +71,10 @@
       gsap.ticker.add(t => lenis.raf(t * 1000));
       gsap.ticker.lagSmoothing(0);
       // pause smooth scroll while the camera try-on is open
-      new MutationObserver(() => document.documentElement.classList.contains('no-scroll') ? lenis.stop() : lenis.start())
-        .observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+      // (and while the splash is up)
+      const lockCheck = () => { const c = document.documentElement.classList; (c.contains('no-scroll') || c.contains('loading')) ? lenis.stop() : lenis.start(); };
+      new MutationObserver(lockCheck).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+      lockCheck();
     }
     if (!reduce) {
       // the neon sign drifts back and the glow deepens as you leave the door

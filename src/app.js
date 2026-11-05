@@ -4,15 +4,34 @@ import { design, emit, onDesign, COLORS, RAINBOW, TONES, SHAPES, FINISHES, ARTS,
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-// ---------- live neon sign (first thing on the page, so it starts right away) ----------
+// ---------- first load: splash → live neon ----------
+// The splash (inline in index.html) stays up until the fonts are in and the neon has framed itself,
+// at least long enough for the sign to draw (~1.6 s) and never longer than 5 s. Then it fades,
+// the neon ignites in place and the door text floats in.
+const html = document.documentElement;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const wait = ms => new Promise(r => setTimeout(r, ms));
+let neon = null;
 const neonCanvas = $('#neonGL');
-if (neonCanvas) {
-  import('./neon.js').then(({ createNeon }) => createNeon($('.door'), neonCanvas)).then(neon => {
-    if (!neon) { neonCanvas.remove(); return; }
+const neonReady = !neonCanvas ? Promise.resolve() :
+  import('./neon.js').then(({ createNeon }) => createNeon($('.door'), neonCanvas)).then(n => {
+    if (!n) { neonCanvas.remove(); return; }
+    neon = n;
     $('.door').classList.add('neon-live');
-    window.neonSurge = () => neon.surge();
+    window.neonSurge = () => n.surge();
+    return n.ready;
   }).catch(() => neonCanvas.remove());
-}
+const fontsReady = document.fonts ? document.fonts.ready.catch(() => {}) : Promise.resolve();
+Promise.race([
+  Promise.all([neonReady, fontsReady, wait(reduceMotion ? 300 : 1600)]),
+  wait(5000)
+]).then(() => {
+  if (!html.classList.contains('loading')) { neon && neon.start(); return; }   // failsafe already fired
+  html.classList.remove('loading');
+  html.classList.add('revealing', 'revealed');
+  setTimeout(() => neon && neon.start(), reduceMotion ? 0 : 350);
+  setTimeout(() => { html.classList.remove('revealing'); $('.splash')?.remove(); }, 1000);
+});
 
 // ---------- crystal chandelier (welcome section, loads as it nears view) ----------
 const chand = $('.chandelier');

@@ -13,6 +13,30 @@
 <meta property="og:image" content="https://salonsang.com/images/og.jpg">
 <meta property="og:url" content="https://salonsang.com/">
 <meta name="twitter:card" content="summary_large_image">
+<style id="splash-css">
+/* first paint: a dark salon with Sang's sign drawing itself while the 3D loads */
+html.loading,html.loading body{overflow:hidden}
+.splash{display:none}
+html.loading .splash,html.revealing .splash{display:grid}
+.splash{position:fixed;inset:0;z-index:9999;place-items:center;align-content:center;gap:22px;
+  background:radial-gradient(ellipse at 50% 42%,#2a1c20 0,#170f12 55%,#0c0809 100%);transition:opacity .8s ease,visibility .8s}
+html.revealing .splash{opacity:0;visibility:hidden;pointer-events:none}
+.splash-sign{width:min(76vw,500px);height:auto;overflow:visible;filter:drop-shadow(0 0 6px rgba(255,150,90,.55)) drop-shadow(0 0 18px rgba(255,120,70,.3))}
+.splash-sign path{fill:none;stroke:#ffc39a;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;
+  animation:splash-draw 1s cubic-bezier(.5,0,.3,1) var(--d) forwards}
+@keyframes splash-draw{to{stroke-dashoffset:0}}
+.splash-sub{font:500 11px/1 system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:.42em;text-transform:uppercase;color:#d9a98a;opacity:0;
+  animation:splash-fade .8s ease .9s forwards;padding-left:.42em}
+.splash-dot{width:6px;height:6px;border-radius:50%;background:#ffd9b8;box-shadow:0 0 10px 3px rgba(255,190,140,.7);animation:splash-pulse 1.2s ease-in-out infinite}
+@keyframes splash-fade{to{opacity:.85}}
+@keyframes splash-pulse{50%{opacity:.25;transform:scale(.6)}}
+@media (prefers-reduced-motion:reduce){.splash-sign path{animation:none;stroke-dashoffset:0}.splash-sub{animation:none;opacity:.85}.splash-dot{animation:none}}
+</style>
+<script>
+// show the splash only when JS runs; never let it get stuck (failsafe after 7 s)
+document.documentElement.classList.add('loading');
+setTimeout(function(){var h=document.documentElement;if(h.classList.contains('loading')){h.classList.remove('loading');h.classList.add('revealed');}},7000);
+</script>
 <link rel="icon" href="images/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,6 +44,8 @@
 <link rel="stylesheet" href="js/vendor/lenis.css">
 <link rel="stylesheet" href="css/style.css">
 <link rel="modulepreload" href="js/build/app.js">
+<link rel="preload" as="image" href="images/neon-room.webp">
+<link rel="preload" as="fetch" href="images/neon-tubes.json" crossorigin>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -44,6 +70,11 @@
 </script>
 </head>
 <body>
+<div class="splash" aria-hidden="true">
+  <svg class="splash-sign" viewBox="0 0 850 310" aria-hidden="true"><path d="M364 154 367 148 369 142 372 136 373 133" pathLength="1" style="--d:0.49s"/><path d="M249 161 249 155 250 149 252 144" pathLength="1" style="--d:0.38s"/><path d="M337 158 335 159" pathLength="1" style="--d:0.47s"/><path d="M137 155 134 149 128 144 122 140 116 137 110 134 104 132 98 131 92 129 86 128 80 126 74 125 68 123 62 121 56 118 50 113 47 107 47 101 49 95 52 89 57 83 62 77 68 72 74 68 80 63 86 60 92 56 98 53 104 50 110 47 116 45 122 43 128 41 134 39 140 37 146 36 152 35 158 34 164 34 170 33 176 33 182 34 188 38 192 43 194 49 192 55 189 61 184 66 179 72 173 76 168 80 165 82" pathLength="1" style="--d:0.24s"/><path d="M208 159 211 153 215 147" pathLength="1" style="--d:0.33s"/><path d="M363 163 363 157 363 155" pathLength="1" style="--d:0.49s"/><path d="M208 160 208 166 208 172 211 177 217 179 223 178 229 174 235 169 241 164 246 162 248 162" pathLength="1" style="--d:0.33s"/><path d="M140 158 140 164 141 170 140 176 139 182 137 188 134 194 130 200 126 206 121 212 116 218 110 222 104 227 98 231 92 235 86 238 80 241 74 243 68 245 62 247 56 248 50 249 44 250 38 250 32 249 26 248 20 244 18 238 18 232 20 226 24 220 29 214 35 209 41 204 47 200 53 196 59 192 65 189 71 186 77 182 83 179 89 177 95 174 101 171 107 169 113 167 119 164 125 162 131 160 136 156" pathLength="1" style="--d:0.25s"/><path d="M178 145 174 149" pathLength="1" style="--d:0.28s"/><path d="M364 164 370 162 375 157 380 151 386 145 392 140 397 136 403 134 408 136 409 141 408 147 406 153 404 159 403 165 403 171 406 176 411 178 417 176 423 173 429 167 434 161 439 156 441 153" pathLength="1" style="--d:0.49s"/><path d="M297 163 298 169 301 175 307 178 313 178 319 176 325 172 330 167 334 162 334 160" pathLength="1" style="--d:0.43s"/><path d="M338 157 340 151 342 145 343 139 342 133 339 128 333 125 327 126 322 131 319 137" pathLength="1" style="--d:0.47s"/><path d="M339 158 345 158 351 156 357 154 363 154" pathLength="1" style="--d:0.47s"/><path d="M217 138 215 133 209 130 203 130 197 132 191 135 185 139 179 144" pathLength="1" style="--d:0.31s"/><path d="M178 143 177 144" pathLength="1" style="--d:0.28s"/><path d="M141 157 147 154 153 152 159 150 165 149 170 148 173 149" pathLength="1" style="--d:0.25s"/><path d="M319 138 320 144 322 150 327 155 332 158 334 159" pathLength="1" style="--d:0.45s"/><path d="M297 161 300 155 302 149 306 143 312 138 318 137" pathLength="1" style="--d:0.43s"/><path d="M253 144 259 142 264 138 269 132 274 126 279 120 283 114 287 108 291 102 294 96 298 90 301 84 304 78 306 72 309 66 311 60 312 54 309 49 304 48 298 50 293 56 288 62 283 68 279 74 276 80 272 86 269 92 266 98 264 104 262 110 259 116 257 122 256 128 254 134 253 140 252 143" pathLength="1" style="--d:0.39s"/><path d="M173 150 170 156 166 162 164 168 165 174 169 179 175 180 181 178 187 174 193 168 199 162 204 160 207 159" pathLength="1" style="--d:0.27s"/><path d="M249 163 250 169 251 175 254 180 260 183 266 182 272 180 278 176 283 170 289 165 294 162 296 162" pathLength="1" style="--d:0.38s"/><path d="M356 177 359 171 362 166 363 164" pathLength="1" style="--d:0.50s"/><path d="M622 158 616 160 610 165 604 171 598 176 592 179 586 179 581 176 580 170 580 165 581 163" pathLength="1" style="--d:0.67s"/><path d="M583 163 584 162" pathLength="1" style="--d:0.62s"/><path d="M654 170 658 166" pathLength="1" style="--d:0.71s"/><path d="M554 152 551 146 546 141 540 137 534 134 528 132 522 130 516 128 510 127 504 125 498 123 492 121 486 118 480 115 475 110 472 104 474 98 476 92 480 86 486 80 492 75 498 70 504 65 510 61 516 58 522 54 528 51 534 48 540 46 546 44 552 42 558 40 564 38 570 37 576 36 582 35 588 34 594 34 600 35 606 36 612 40 615 45 614 51 612 57 608 63 603 69 597 74 591 78 586 80" pathLength="1" style="--d:0.58s"/><path d="M555 153 557 155" pathLength="1" style="--d:0.59s"/><path d="M817 151 811 157 805 162 799 167 793 172 787 176 781 179 775 182 770 182 768 181" pathLength="1" style="--d:0.91s"/><path d="M558 155 564 152 570 150 576 148 582 147 588 149" pathLength="1" style="--d:0.59s"/><path d="M629 148 625 154 623 157" pathLength="1" style="--d:0.68s"/><path d="M650 180 653 174 653 171" pathLength="1" style="--d:0.71s"/><path d="M557 156 557 162 557 168 556 174 554 180 550 186 546 192 542 198 536 204 530 210 524 214 518 218 512 222 506 225 500 227 494 229 488 231 482 232 476 233 470 234 464 234 458 233 452 230 448 226 446 220 448 214 452 208 457 203 463 198 469 194 475 189 481 186 487 182 493 179 499 176 505 173 511 170 517 168 523 165 529 163 535 161 541 159 547 157 552 155 554 153" pathLength="1" style="--d:0.59s"/><path d="M667 136 665 142 662 148 660 154 659 160 658 164" pathLength="1" style="--d:0.73s"/><path d="M771 157 765 159 760 164 754 170 748 175 742 178 736 179 730 176 728 172 727 170" pathLength="1" style="--d:0.85s"/><path d="M772 158 771 164 770 170 769 176 768 180" pathLength="1" style="--d:0.85s"/><path d="M582 161 585 155 588 149" pathLength="1" style="--d:0.62s"/><path d="M762 194 756 194 750 196 744 200 738 204 732 207 726 212 720 216 714 222 709 228 704 234 701 240 699 246 699 252 702 258 707 261 713 261 719 259 725 256 731 251 736 245 741 239 745 233 749 227 752 221 755 215 757 209 760 203 762 197 762 194" pathLength="1" style="--d:0.88s"/><path d="M762 194 765 188 767 182" pathLength="1" style="--d:0.88s"/><path d="M588 149 594 145 599 140 605 136 611 132 617 131 623 131 628 134 631 140" pathLength="1" style="--d:0.61s"/><path d="M780 139 774 134 768 131 762 132 756 134 750 137 744 142 738 147 734 153 730 159 728 165 727 168" pathLength="1" style="--d:0.86s"/><path d="M777 146 774 152 772 156" pathLength="1" style="--d:0.86s"/><path d="M726 169 720 171 714 175 708 178 702 179 698 176 696 170 696 164 698 158 700 152 702 146 703 140 700 136 694 136 688 140 682 145 676 151 671 157 666 162 661 165 659 165" pathLength="1" style="--d:0.81s"/><path d="M623 159 622 165 622 171 624 176 629 179 635 178 641 174 647 172 652 170" pathLength="1" style="--d:0.67s"/><path d="M160 285 166 284 172 283 178 282 184 281 190 280 196 279 202 278 208 277 214 276 220 275 226 274 232 274 238 273 244 272 250 271 256 270 262 270 268 269 274 268 280 268 286 267 292 266 298 265 304 265 310 264 316 264 322 263 328 262 334 262 340 261 346 261 352 260 358 260 364 260 370 259 376 259 382 258 388 258 394 258 400 257 406 257 412 256 418 256 424 256 430 255 436 255 442 255 448 255 454 255 460 254 466 254 472 254 478 254 484 254 490 254 496 253 502 253 508 253 514 253 520 253 526 253 532 253 538 253 544 253 550 254 556 254 562 254 568 254 574 254 580 254 586 255 592 255 598 255 604 255 610 256 616 256 622 257 628 257 634 257 640 258 646 258 652 259 658 259 664 260 670 260 675 261 677 261" pathLength="1" style="--d:0.70s"/></svg>
+  <p class="splash-sub">Nail Studio · Eugene</p>
+  <i class="splash-dot"></i>
+</div>
 
 <canvas id="sparkles" aria-hidden="true"></canvas>
 

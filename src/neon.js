@@ -227,7 +227,7 @@ export async function createNeon(door, canvas) {
 
   // ---------- ignition, hum and the odd flicker ----------
   const on = [0, 0, 0], sweep = [0, 0, 0];
-  const t0 = performance.now() + 450;
+  let t0 = Infinity;                                   // ignition waits for start() (after the splash)
   const STARTS = [0, 0.75, 1.5];                       // Salon, Sang, underline
   const SWEEP_DUR = [0.7, 0.6, 0.45];
   const stutter = s => (s < 0.06 ? 1 : s < 0.11 ? 0.15 : s < 0.16 ? 0.9 : s < 0.2 ? 0.3 : 1);
@@ -235,7 +235,7 @@ export async function createNeon(door, canvas) {
   if (reduce) { on.fill(1); sweep.fill(1); }
 
   function update(now) {
-    const t = (now - t0) / 1000;
+    const t = Math.max(-1, (now - t0) / 1000);
     if (!reduce) {
       for (let c = 0; c < 3; c++) {
         const s = t - STARTS[c];
@@ -284,10 +284,20 @@ export async function createNeon(door, canvas) {
   new IntersectionObserver(([en]) => { visible = en.isIntersecting; setRunning(); }).observe(door);
   document.addEventListener('visibilitychange', setRunning);
   addEventListener('resize', resize);
+  // re-frame whenever the door or its text changes size (fonts arriving, phone toolbars, rotation)
+  const ro = new ResizeObserver(() => resize());
+  ro.observe(door);
+  const contentEl = door.querySelector('.door-content'); if (contentEl) ro.observe(contentEl);
+  if (document.fonts) document.fonts.ready.then(resize);
   resize();
   setRunning();
+  // ready = framed with final fonts and one frame on screen
+  const ready = (document.fonts ? document.fonts.ready : Promise.resolve())
+    .then(() => { resize(); return new Promise(r => requestAnimationFrame(() => { render(performance.now()); r(); })); });
 
   return {
+    ready,
+    start() { if (t0 === Infinity) t0 = performance.now() + 150; },
     surge() { surge = 1.2; },
     dispose() { running = false; composer.dispose(); renderer.dispose(); }
   };
