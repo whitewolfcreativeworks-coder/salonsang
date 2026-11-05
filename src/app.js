@@ -162,6 +162,9 @@ function start(createStudio) {
   stage.classList.add('ready');
 }
 const io = new IntersectionObserver(([en]) => { if (en.isIntersecting) { boot(); io.disconnect(); } }, { rootMargin: '400px' });
+// the photo studio is light now, so warm it up quietly right after the intro instead of waiting for the scroll
+const warm = () => (window.requestIdleCallback || setTimeout)(() => boot(), { timeout: 2500 });
+if (document.readyState === 'complete') setTimeout(warm, 2500); else addEventListener('load', () => setTimeout(warm, 2500));
 io.observe(stage);
 
 wall.addEventListener('click', e => {

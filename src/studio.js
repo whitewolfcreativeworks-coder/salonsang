@@ -1,766 +1,458 @@
-// Salon Sang 3D Nail Studio
-// three.js physical materials + custom shaders (magnetic cat-eye, glitter flakes),
-// real brush-stroke painting into per-nail textures, 3D crystals, GPU sparkles and bloom.
-import * as THREE from 'three';
-import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { Sparkles } from '@pmndrs/vanilla/core/Sparkles.js';
-import { MeshTransmissionMaterial } from '@pmndrs/vanilla/materials/MeshTransmissionMaterial.js';
-import { design, emit, onDesign, ACCENT, FINGER_NAMES } from './state.js';
+// Photo nail studio: one of Sang's real client photos (white fur, her sunflower card), with each nail
+// traced by Segment Anything (Meta, open source) offline. A small WebGL2 shader repaints the nails live,
+// keeping the photo's own light and gloss: polish colors, finishes, art, shapes, skin tones, brush strokes.
+// No 3D engine and no big lighting files: the whole studio is one ~60 KB photo + one ~70 KB mask.
+import { design, emit, onDesign, FINGER_NAMES, TONES } from './state.js';
+import { PHOTO, SKIN, NAILS } from './studio-data.js';
 
-const TEX = 512;
-const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const N = NAILS.length;
+const FINISH = { gloss: 0, matte: 1, jelly: 2, chrome: 3, cateye: 4, glitter: 5 };
+const ART = { none: 0, daisy: 1, sunflower: 2, starfish: 3, dots: 4, french: 5, gems: 6, heart: 7, swirl: 8 };
+const SHAPE = { square: 0, round: 1, almond: 2, coffin: 3, stiletto: 4 };
+const ACCENT_SLOT = 1;                                        // ring fingers get the accent art
+// nail box (photo uv) that must stay in view
+const BOX = (() => { let x0 = 1, x1 = 0, y0 = 1, y1 = 0; NAILS.forEach(n => { x0 = Math.min(x0, n.c[0]); x1 = Math.max(x1, n.c[0]); y0 = Math.min(y0, n.c[1]); y1 = Math.max(y1, n.c[1]); }); return { x0: x0 - 0.06, x1: x1 + 0.07, y0: y0 - 0.08, y1: y1 + 0.09 }; })();
+
+const VS = `#version 300 es
+in vec2 aPos; out vec2 vUv;
+void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const FS = `#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 outColor;
+uniform sampler2D uPhoto, uMask, uPaint;
+uniform vec2 uView, uOff;          // screen px → photo px:  q = (frag - uOff) / uView
+uniform vec2 uRes, uPhotoPx;
+uniform float uTime; uniform vec2 uLight;
+uniform int uFinish, uArt, uShape;
+uniform vec3 uToneMul;
+uniform vec2 uC[${N}], uAx[${N}];
+uniform float uBase[${N}], uTip[${N}], uHw[${N}], uLum[${N}], uHi[${N}];
+uniform vec4 uCol[${N}], uPrev[${N}];      // rgb + a (a=0 → bare nail)
+uniform float uProg[${N}], uManual[${N}], uAccent[${N}], uPulse[${N}];
+
+vec3 toLin(vec3 c){ return pow(c, vec3(2.2)); }
+vec3 toSrgb(vec3 c){ return pow(max(c, 0.0), vec3(1.0/2.2)); }
+vec3 toLinI(vec3 c){ return pow(c, vec3(2.2)); }
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float sdCircle(vec2 p, float r){ return length(p) - r; }
+float sdStar5(vec2 p, float r, float rf){
+  const vec2 k1 = vec2(0.809016994375, -0.587785252292); const vec2 k2 = vec2(-k1.x, k1.y);
+  p.x = abs(p.x); p -= 2.0*max(dot(k1,p),0.0)*k1; p -= 2.0*max(dot(k2,p),0.0)*k2; p.x = abs(p.x); p.y -= r;
+  vec2 ba = rf*vec2(-k1.y,k1.x) - vec2(0,1); float h = clamp(dot(p,ba)/dot(ba,ba), 0.0, r);
+  return length(p-ba*h) * sign(p.y*ba.x - p.x*ba.y);
+}
+float sdHeart(vec2 p){ p.x = abs(p.x);
+  if (p.y + p.x > 1.0) return sqrt(dot(p - vec2(0.25,0.75), p - vec2(0.25,0.75))) - sqrt(2.0)/4.0;
+  return sqrt(min(dot(p - vec2(0.0,1.0), p - vec2(0.0,1.0)), dot(p - 0.5*max(p.x+p.y,0.0), p - 0.5*max(p.x+p.y,0.0)))) * sign(p.x - p.y); }
+float fill(float d, float aa){ return 1.0 - smoothstep(-aa, aa, d); }
+
+// half-width profile of the free edge for each shape; x: 0 at mid-nail → 1 at the new tip
+float profile(int s, float x){
+  x = clamp(x, 0.0, 1.0);
+  if (s == 0) return x < 0.82 ? 1.0 : 0.72 + 0.28 * sqrt(max(0.0, 1.0 - pow((x - 0.82) / 0.18, 2.0)));   // square, soft corners
+  if (s == 1) return sqrt(max(0.0, 1.0 - pow(max(0.0, x - 0.35) / 0.65, 2.0)));                          // round
+  if (s == 2) return pow(max(0.0, 1.0 - x * x), 0.75);                                                     // almond
+  if (s == 3) return x < 0.97 ? mix(1.0, 0.56, x) : 0.0;                                                   // coffin
+  return pow(max(0.0, 1.0 - x), 1.15);                                                                     // stiletto
+}
+float tipLen(int s){ return s == 0 ? 1.06 : s == 1 ? 1.04 : s == 2 ? 1.14 : s == 3 ? 1.2 : 1.36; }
+// where each shape starts to differ from the real (almond-ish) nail, and the real nail's half-width there
+float shapeStart(int s){ return s == 0 || s == 3 ? 0.5 : s == 1 ? 0.62 : 0.78; }
+float natW(float v){ return sqrt(max(0.0, 1.0 - pow(max(0.0, v - 0.45) / 0.6, 2.0))); }
+
+vec3 artColor(int art, vec2 a, vec3 base, float t, out float cover){
+  // a: x across the nail (-1..1), y along it (0 cuticle → 1 tip)
+  cover = 0.0; vec3 c = base; float aa = 0.04;
+  if (art == 1 || art == 2) {                  // daisy / sunflower
+    vec2 p = vec2(a.x, (a.y - 0.52) * 1.6); float r = length(p), th = atan(p.y, p.x);
+    float np = art == 1 ? 6.0 : 11.0;
+    float petal = r - (art == 1 ? 0.55 : 0.6) * (0.55 + 0.45 * abs(cos(th * np * 0.5)));
+    float ctr = sdCircle(p, art == 1 ? 0.2 : 0.28);
+    float pc = fill(petal, aa), cc = fill(ctr, aa);
+    vec3 petalC = art == 1 ? vec3(0.99, 0.98, 0.96) : vec3(0.98, 0.72, 0.08);
+    vec3 ctrC = art == 1 ? vec3(0.99, 0.80, 0.18) : vec3(0.36, 0.2, 0.08) + 0.12 * hash(floor(p * 30.0));
+    c = mix(mix(c, petalC, pc), ctrC, cc); cover = max(pc, cc);
+  } else if (art == 3) {                       // starfish
+    vec2 p = vec2(a.x, (a.y - 0.55) * 1.55) * 1.1; float d = sdStar5(p, 0.62, 0.42);
+    float s = fill(d, aa); vec3 sc = vec3(0.98, 0.55, 0.32) * (0.9 + 0.2 * step(0.75, hash(floor(p * 18.0))));
+    c = mix(c, sc, s); cover = s;
+  } else if (art == 4) {                       // polka dots
+    vec2 g = vec2(a.x * 2.2, a.y * 5.0); vec2 id = floor(g); vec2 f = fract(g) - 0.5;
+    if (mod(id.y, 2.0) > 0.5) { f = fract(g + vec2(0.5, 0.0)) - 0.5; }
+    float s = fill(sdCircle(f, 0.22), 0.06); c = mix(c, vec3(0.98), s); cover = s;
+  } else if (art == 5) {                       // french tip (all nails)
+    float line = 0.74 + 0.16 * a.x * a.x; float s = smoothstep(line - 0.02, line + 0.02, a.y);
+    c = mix(c, vec3(0.99, 0.98, 0.97), s); cover = s;
+  } else if (art == 6) {                       // crystals near the cuticle
+    for (int k = 0; k < 3; k++) {
+      vec2 o = vec2(float(k - 1) * 0.5, 0.26 + 0.12 * float(k == 1 ? 1 : 0));
+      vec2 p = (vec2(a.x, a.y * 2.6) - vec2(o.x, o.y * 2.6));
+      float d = sdCircle(p, k == 1 ? 0.34 : 0.26); float s = fill(d, 0.05);
+      float facet = 0.6 + 0.4 * abs(sin(atan(p.y, p.x) * 4.0 + t * 0.8 + float(k)));
+      vec3 gc = mix(vec3(0.85, 0.9, 1.0), vec3(1.0, 0.85, 0.95), 0.5 + 0.5 * sin(t + float(k) * 2.0)) * facet;
+      gc += pow(max(0.0, 1.0 - length(p - vec2(-0.08, -0.08)) * 6.0), 3.0);
+      c = mix(c, gc, s); cover = max(cover, s);
+    }
+  } else if (art == 7) {                       // heart
+    vec2 p = vec2(a.x * 1.15, -(a.y - 0.82) * 1.9); float s = fill(sdHeart(p), 0.05);
+    c = mix(c, vec3(0.86, 0.06, 0.24), s); cover = s;
+  } else if (art == 8) {                       // gold swirl
+    float w = a.x - 0.45 * sin(a.y * 9.0 + 0.6); float s = 1.0 - smoothstep(0.08, 0.13, abs(w));
+    s *= smoothstep(0.08, 0.2, a.y) * smoothstep(1.0, 0.85, a.y);
+    vec3 gold = vec3(0.95, 0.74, 0.32) * (0.75 + 0.5 * pow(abs(sin(a.y * 14.0 + t * 1.5)), 6.0));
+    c = mix(c, gold, s); cover = s;
+  }
+  return c;
+}
+
+
+vec3 finish(vec3 base, float shade, float Ln, float spec, float glint, vec2 q, float un, float v, float ax01, vec3 under, int i){
+  vec3 pc;
+  if (uFinish == 1) {                                   // velvet matte
+    pc = base * clamp(mix(1.0, Ln, 0.3), 0.75, 1.15) * 1.05 + 0.02 * (hash(q) - 0.5);
+    spec = 0.0; glint = 0.0;
+  } else if (uFinish == 2) {                            // jelly: sheer, juicy
+    pc = mix(under, base * 0.85, 0.62) * shade;
+  } else if (uFinish == 3) {                            // chrome glaze: pearly, glazed donut
+    float ang = un * 1.4 + v * 1.8 + uLight.x * 2.0 + uLight.y;
+    vec3 iri = 0.5 + 0.5 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + ang * 0.35));
+    pc = mix(base, vec3(1.0), 0.14) * shade + toLinI(iri) * 0.12 * (0.5 + 0.5 * shade);
+    glint *= 1.6; spec *= 1.2;
+  } else if (uFinish == 4) {                            // cat-eye: a band of light that follows the magnet
+    float bp = uLight.x * 0.9;
+    float band = exp(-pow((un - bp) / 0.32, 2.0));
+    float sparkle = 0.65 + 0.35 * hash(floor(q * 0.9) + floor(uTime * 3.0));
+    pc = base * 0.22 * shade + (base * 1.5 + 0.18) * band * sparkle * (0.7 + 0.3 * shade);
+    glint *= 0.5;
+  } else if (uFinish == 5) {                            // glitter flakes
+    vec2 cell = floor(q * 0.55); float h = hash(cell);
+    float flake = step(0.72, h) * pow(max(0.0, sin(uTime * 2.0 + h * 50.0 + uLight.x * 9.0)), 10.0);
+    vec3 fc = mix(vec3(1.0, 0.9, 0.6), vec3(1.0), step(0.86, h));
+    pc = base * shade * 0.9 + fc * flake * 1.4 + base * 0.15 * step(0.72, h);
+  } else {                                              // classic gloss
+    pc = base * shade;
+  }
+  pc = mix(pc, vec3(1.0), clamp(spec * 0.85, 0.0, 1.0)) + vec3(glint * 0.45);
+  pc *= mix(0.8, 1.0, 1.0 - smoothstep(0.65, 1.05, ax01));   // richer at the side walls
+  pc *= mix(0.82, 1.0, smoothstep(0.0, 0.05, v));            // tiny cuticle line
+  return pc;
+}
+
+void main(){
+  vec2 frag = vec2(vUv.x, 1.0 - vUv.y) * uRes;
+  vec2 q = (frag - uOff) / uView;                     // photo px
+  vec2 uv = q / uPhotoPx;
+  vec3 photo = toLin(texture(uPhoto, uv).rgb);
+  vec4 mk = texture(uMask, uv);
+  float skin = mk.b, realA = mk.g; int rid = int(floor(mk.r * 255.0 / 30.0 + 0.5));
+  // skin tone
+  vec3 col = mix(photo, photo * uToneMul, skin);
+  float L = dot(texture(uPhoto, uv).rgb, vec3(0.299, 0.587, 0.114));
+  float shadowAcc = 0.0;
+  vec2 p = vec2(uv.x, uv.y * uPhotoPx.y / uPhotoPx.x);   // photo-width units
+  float aa = 1.2 / (uView.x * uPhotoPx.x);                // ~1 screen px in photo-width units
+
+  for (int i = 0; i < ${N}; i++) {
+    vec2 ax = uAx[i], pr = vec2(-ax.y, ax.x);
+    vec2 d = p - vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x);
+    float t = dot(d, ax), u = dot(d, pr);
+    float len = uTip[i] - uBase[i];
+    float v = (t - uBase[i]) / len;                      // 0 cuticle → 1 tip
+    if (v < -0.2 || v > 1.6 || abs(u) > uHw[i] * 1.6) continue;
+    float hw = uHw[i];
+    float Lx = tipLen(uShape);
+    float s0 = shapeStart(uShape);
+    float x = (v - s0) / (Lx - s0);
+    float w0 = (uShape == 0 || uShape == 3) ? 1.0 : natW(s0);
+    float w = hw * w0 * profile(uShape, x);
+    float ext = (1.0 - smoothstep(-aa, aa, abs(u) - w)) * (1.0 - smoothstep(Lx - 0.004, Lx + aa / len, v)) * smoothstep(s0 - 0.02, s0 + 0.02, v);
+    float real = rid == i + 1 ? realA : 0.0;
+    vec4 newC = uCol[i], oldC = uPrev[i];
+    float cover = real;
+    // soft shadow of the longer free edge onto whatever is underneath
+    if (real < 0.5 && v > s0 && (newC.a > 0.5 || oldC.a > 0.5)) {
+      vec2 sp = vec2(u + hw * 0.08, v - 0.04);
+      float ws = hw * w0 * profile(uShape, (sp.y - s0) / (Lx - s0)) * 1.08;
+      shadowAcc = max(shadowAcc, 0.3 * (1.0 - smoothstep(0.0, hw * 0.35, abs(sp.x) - ws)) * (1.0 - smoothstep(Lx - 0.02, Lx + 0.08, sp.y)) * step(0.6, sp.y));
+    }
+    if (max(real, ext) <= 0.001) continue;
+    bool onReal = rid == i + 1 && realA > 0.5;
+    vec2 a = vec2(u / max(w, hw * 0.25), v);           // nail-local, x normalized to the current width
+    float ax01 = clamp(abs(u) / hw, 0.0, 1.0);
+
+    // how much of the new coat is on: three brush strokes (center, left, right), then full
+    float pg = uProg[i], fresh = 0.0;
+    if (pg >= 3.0) fresh = 1.0; else {
+      for (int k = 0; k < 3; k++) {
+        float cx = k == 0 ? 0.0 : (k == 1 ? -0.55 : 0.55);
+        float reach = clamp(pg - float(k), 0.0, 1.0) * (Lx + 0.08);
+        fresh = max(fresh, (1.0 - smoothstep(0.55, 0.7, abs(u / hw - cx))) * (1.0 - smoothstep(reach - 0.06, reach, v)) * step(0.001, reach));
+      }
+    }
+    if (uManual[i] > 0.5) fresh = max(fresh, texture(uPaint, uv).r);
+    if (newC.a < 0.5) fresh = 0.0;
+    cover = max(real, ext * (oldC.a > 0.5 ? 1.0 : fresh));
+    if (cover <= 0.001) continue;
+    // light for the longer free edge: borrow it from just inside the real nail's tip, at the same relative spot
+    float Lsrc = L; bool synth = !onReal;
+    if (synth) {
+      float vc = min(v, 0.86), uc = u / max(w, 1e-4) * hw * natW(vc) * 0.92;
+      vec2 pp = vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x) + ax * (uBase[i] + vc * len) + pr * uc;
+      vec2 uv2 = vec2(pp.x, pp.y * uPhotoPx.x / uPhotoPx.y);
+      Lsrc = dot(texture(uPhoto, uv2).rgb, vec3(0.299, 0.587, 0.114));
+    }
+    // light: borrow the photo's real light on the real nail, synthesize it on longer free edges
+    float Ln = Lsrc / uLum[i];
+    float shade = clamp(mix(1.0, Ln, 0.6), 0.55, 1.3) * (synth ? 1.0 - 0.08 * smoothstep(0.95, Lx, v) : 1.0);
+    float spec = smoothstep(uHi[i], min(uHi[i] + 0.12, 0.995), Lsrc) * (synth ? 0.85 : 1.0);
+    float gpos = -0.35 + uLight.x * 0.5;                 // a glint that follows your finger / phone tilt
+    float glint = exp(-pow((u / hw - gpos) / 0.13, 2.0)) * smoothstep(0.08, 0.3, v) * smoothstep(Lx, Lx - 0.35, v);
+    vec3 bareCol = onReal ? col : toLin(vec3(0.94, 0.86, 0.83)) * shade + spec * 0.0;
+    vec3 under = onReal ? photo : toLin(vec3(0.95, 0.88, 0.86));
+    vec3 oldCol = bareCol;
+    if (oldC.a > 0.5) oldCol = finish(toLin(oldC.rgb), shade, Ln, spec, glint, q, u / hw, v, ax01, under, i);
+    vec3 nailCol = oldCol;
+    if (fresh > 0.0) {
+      vec3 base = toLin(newC.rgb);
+      float artCover = 0.0;
+      if (uArt != 0 && (uArt == 5 || uAccent[i] > 0.5)) base = toLin(artColor(uArt, a, toSrgb(base), uTime, artCover));
+      nailCol = mix(oldCol, finish(base, shade, Ln, spec, glint, q, u / hw, v, ax01, under, i), fresh);
+    }
+    nailCol += vec3(0.25, 0.12, 0.18) * uPulse[i] * max(0.0, 1.0 - v) * 0.5;
+    col = mix(col, nailCol, cover);
+  }
+  col *= 1.0 - shadowAcc;
+  outColor = vec4(toSrgb(col), 1.0);
+}`;
 
 export function createStudio(container, { onReady, onTip } = {}) {
-  // ---------- renderer ----------
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  } catch (e) { return null; }
-  const isPhone = Math.min(innerWidth, innerHeight) < 600;
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, isPhone ? 2 : 1.75));
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.domElement.className = 'studio-canvas';
-  container.prepend(renderer.domElement);
+  const canvas = document.createElement('canvas');
+  canvas.className = 'studio-canvas';
+  const gl = canvas.getContext('webgl2', { antialias: false, premultipliedAlpha: false, alpha: false, powerPreference: 'low-power' });
+  if (!gl) return null;
+  container.prepend(canvas);
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const scene = new THREE.Scene();
-  const BLUSH = new THREE.Color('#f7dfe6');
-  scene.background = BLUSH.clone();
-  scene.fog = new THREE.Fog(BLUSH, 11, 20);
-  const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-  const camTarget = new THREE.Vector3(0.3, 0.4, -1.4);
+  // ---------- GL setup ----------
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const prog = gl.createProgram();
+  try { gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); } catch (e) { console.error(e); canvas.remove(); return null; }
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); canvas.remove(); return null; }
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const U = {}; const u = n => (U[n] ??= gl.getUniformLocation(prog, n));
+  const tex = (unit, filter) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+  const tPhoto = tex(0, gl.LINEAR), tMask = tex(1, gl.NEAREST), tPaint = tex(2, gl.LINEAR);
+  gl.uniform1i(u('uPhoto'), 0); gl.uniform1i(u('uMask'), 1); gl.uniform1i(u('uPaint'), 2);
+  // manual brush canvas (half resolution is plenty)
+  const paint = document.createElement('canvas'); paint.width = PHOTO.w / 2; paint.height = PHOTO.h / 2;
+  const pctx = paint.getContext('2d');
+  const uploadPaint = () => { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tPaint); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paint); };
+  uploadPaint();
 
-  // lighting: CC0 Poly Haven studio HDRI for reflections + soft window key
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  new HDRLoader().load(new URL('../../assets/studio_small_09_1k.hdr', import.meta.url).href, hdr => {
-    hdr.mapping = THREE.EquirectangularReflectionMapping;
-    scene.environment = pmrem.fromEquirectangular(hdr).texture;
-    scene.environmentIntensity = 0.85;
-    scene.environmentRotation = new THREE.Euler(0, 2.2, 0);
-    hdr.dispose();
-  });
-  const key = new THREE.DirectionalLight('#fff1e6', 1.25); key.position.set(-4, 9, 4); scene.add(key);
-  const fill = new THREE.DirectionalLight('#ffd6e6', 0.35); fill.position.set(5, 3, 6); scene.add(fill);
+  const load = src => new Promise((res, rej) => { const im = new Image(); im.decoding = 'async'; im.onload = () => res(im); im.onerror = rej; im.src = src; });
+  const base = new URL('../../images/', import.meta.url);
+  let ready = false;
+  Promise.all([load(new URL('studio-hand.webp', base).href), load(new URL('studio-hand-mask.png', base).href)]).then(([ph, mk]) => {
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tPhoto); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ph);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tMask); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mk);
+    ready = true; resize(); kick();
+    container.style.backgroundImage = 'none';
+    onReady && onReady();
+    // first coat so the hands aren't bare
+    setTimeout(() => autoPaint(NAILS.map((_, i) => i), design.color[1], design.color[0]), 350);
+  }).catch(() => { container.classList.add('no-gl'); });
 
-  // sparkles floating above the fur
-  const sparkles = new Sparkles({ count: isPhone ? 60 : 110, scale: [12, 3, 8], size: 3.2, speed: 0.22, opacity: 0.85, color: '#fff0f6', noise: 1 });
-  sparkles.position.set(0, 1.6, -1.2);
-  sparkles.setPixelRatio(renderer.getPixelRatio());
-  scene.add(sparkles);
+  // nail geometry
+  gl.uniform2fv(u('uC'), NAILS.flatMap(n => n.c)); gl.uniform2fv(u('uAx'), NAILS.flatMap(n => n.ax));
+  gl.uniform1fv(u('uBase'), NAILS.map(n => n.base)); gl.uniform1fv(u('uTip'), NAILS.map(n => n.tip));
+  gl.uniform1fv(u('uHw'), NAILS.map(n => n.hw)); gl.uniform1fv(u('uLum'), NAILS.map(n => n.lum)); gl.uniform1fv(u('uHi'), NAILS.map(n => n.hi));
+  gl.uniform1fv(u('uAccent'), NAILS.map(n => n.slot === ACCENT_SLOT ? 1 : 0));
+  gl.uniform2f(u('uPhotoPx'), PHOTO.w, PHOTO.h);
 
-  // ---------- shared uniforms ----------
-  const shared = {
-    uTime: { value: 0 },
-    uMagDir: { value: new THREE.Vector2(0.35, 1).normalize() },
-    uMagOff: { value: 0 }
-  };
+  // ---------- nail state ----------
+  const hexRgb = h => { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255); };
+  const nails = NAILS.map(() => ({ col: [0, 0, 0, 0], prev: [0, 0, 0, 0], prog: 3, manual: 0, pulse: 0 }));
+  function pushName(i, name) { const s = NAILS[i].slot; const l = design.nailColors[s]; if (l[l.length - 1] !== name) l.push(name); }
+  function setColor(i, hex) { const n = nails[i]; n.prev = n.col[3] > 0 ? n.col.slice() : [0, 0, 0, 0]; n.col = [...hexRgb(hex), 1]; }
 
-  // ---------- white faux fur (shell-textured, like Sang's photo set) ----------
-  const FUR_W = 20, FUR_D = 24, SHELLS = isPhone ? 18 : 26;
-  const shadowCanvas = document.createElement('canvas'); shadowCanvas.width = 512; shadowCanvas.height = 384;
-  const shadowTex = new THREE.CanvasTexture(shadowCanvas);
-  const furGeo = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(FUR_W, FUR_D, 1, 1).rotateX(-Math.PI / 2));
-  furGeo.instanceCount = SHELLS;
-  furGeo.setAttribute('aLayer', new THREE.InstancedBufferAttribute(new Float32Array([...Array(SHELLS)].map((_, k) => k / (SHELLS - 1))), 1));
-  const furMat = new THREE.ShaderMaterial({
-    uniforms: { uTime: shared.uTime, uLen: { value: 0.42 }, uShadow: { value: shadowTex }, uFog: { value: BLUSH }, uFogNear: { value: 11 }, uFogFar: { value: 20 }, uSize: { value: new THREE.Vector2(FUR_W, FUR_D) } },
-    vertexShader: `
-      attribute float aLayer; uniform float uLen; uniform float uTime;
-      varying vec2 vUv; varying float vL; varying vec3 vW; varying float vDepth;
-      void main(){
-        vUv = uv; vL = aLayer;
-        vec3 p = position; p.y += aLayer * uLen;
-        float k = aLayer * aLayer;
-        p.x += k * (0.16 + 0.05 * sin(uTime * 0.7 + p.z * 0.8 + p.x * 0.4));
-        p.z += k * 0.05 * cos(uTime * 0.6 + p.x * 0.9);
-        vec4 w = modelMatrix * vec4(p, 1.0); vW = w.xyz;
-        vec4 mv = viewMatrix * w; vDepth = -mv.z;
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: `
-      uniform sampler2D uShadow; uniform vec3 uFog; uniform vec2 uSize; uniform float uFogNear; uniform float uFogFar;
-      varying vec2 vUv; varying float vL; varying vec3 vW; varying float vDepth;
-      float h21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
-      void main(){
-        vec2 st = vUv * uSize * 15.0;
-        vec2 id = floor(st); vec2 f = fract(st) - 0.5;
-        float clump = h21(floor(st / 5.0));
-        float h = mix(0.45, 1.0, h21(id)) * mix(0.8, 1.0, clump);
-        float r = 0.62 * (1.0 - vL / h);
-        if (vL > 0.02 && (vL > h || length(f) > r)) discard;
-        float ao = mix(0.5, 1.08, pow(vL, 0.55));
-        vec3 col = vec3(1.0, 0.975, 0.965) * ao;
-        col = mix(col, col * vec3(1.0, 0.93, 0.95), 0.25 * (1.0 - vL));
-        vec2 suv = vec2(vW.x / uSize.x + 0.5, 0.5 - vW.z / uSize.y);
-        float sh = texture2D(uShadow, suv).r;
-        col *= mix(1.0, 0.5, sh * (1.0 - 0.55 * vL));
-        float fog = smoothstep(uFogNear, uFogFar, vDepth);
-        gl_FragColor = vec4(mix(col, uFog, fog), 1.0);
-      }`
-  });
-  const fur = new THREE.Mesh(furGeo, furMat);
-  fur.frustumCulled = false;
-  scene.add(fur);
-
-  // ---------- Sang's sunflower business card ----------
-  const card = (() => {
-    const c = document.createElement('canvas'); c.width = 1024; c.height = 584;
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-    const draw = () => {
-      const g = c.getContext('2d');
-      g.fillStyle = '#fbf8f4'; g.fillRect(0, 0, 1024, 584);
-      const paper = g.createLinearGradient(0, 0, 1024, 584); paper.addColorStop(0, 'rgba(255,255,255,.6)'); paper.addColorStop(1, 'rgba(232,222,214,.5)');
-      g.fillStyle = paper; g.fillRect(0, 0, 1024, 584);
-      // sunflower bleeding off the left edge
-      g.save(); g.translate(70, 400);
-      for (let ring = 0; ring < 2; ring++) for (let p = 0; p < 22; p++) {
-        g.save(); g.rotate(p / 22 * Math.PI * 2 + ring * 0.14);
-        const L = ring ? 250 : 280;
-        const pg = g.createLinearGradient(0, 0, 0, -L); pg.addColorStop(0, '#c9700c'); pg.addColorStop(0.45, '#f2a91a'); pg.addColorStop(1, '#ffd34a');
-        g.fillStyle = pg; g.beginPath(); g.ellipse(0, -L * 0.58, 34, L * 0.46, 0, 0, Math.PI * 2); g.fill(); g.restore();
-      }
-      const cg = g.createRadialGradient(-10, -10, 10, 0, 0, 120); cg.addColorStop(0, '#5a3214'); cg.addColorStop(1, '#2c170a');
-      g.fillStyle = cg; g.beginPath(); g.arc(0, 0, 118, 0, Math.PI * 2); g.fill();
-      g.fillStyle = 'rgba(214,150,60,.55)';
-      for (let k = 0; k < 220; k++) { const a = k * 2.399, r = Math.sqrt(k) * 7.6; g.beginPath(); g.arc(Math.cos(a) * r, Math.sin(a) * r, 3.2, 0, 7); g.fill(); }
-      g.restore();
-      g.fillStyle = '#7b2d1e'; g.textAlign = 'center';
-      g.font = '104px "Great Vibes", cursive'; g.fillText('Sang Whitewolf', 640, 190);
-      g.strokeStyle = '#7b2d1e'; g.lineWidth = 2; g.beginPath(); g.moveTo(410, 250); g.lineTo(500, 250); g.moveTo(780, 250); g.lineTo(870, 250); g.stroke();
-      g.font = '600 34px "Cormorant Garamond", serif'; g.fillText('N A I L   A R T I S T', 640, 262);
-      g.font = '500 44px "Cormorant Garamond", serif'; g.fillText('530-648-4977', 640, 370); g.fillText('salonsang.com', 640, 432);
-      g.beginPath(); g.arc(640, 492, 6, 0, 7); g.fill(); g.beginPath(); g.moveTo(540, 492); g.lineTo(620, 492); g.moveTo(660, 492); g.lineTo(740, 492); g.stroke();
-      tex.needsUpdate = true;
-    };
-    draw(); (document.fonts ? document.fonts.ready : Promise.resolve()).then(draw);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.02, 1.71), [
-      new THREE.MeshStandardMaterial({ color: '#efe7df', roughness: .8 }), new THREE.MeshStandardMaterial({ color: '#efe7df', roughness: .8 }),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.72 }), new THREE.MeshStandardMaterial({ color: '#efe7df' }),
-      new THREE.MeshStandardMaterial({ color: '#efe7df', roughness: .8 }), new THREE.MeshStandardMaterial({ color: '#efe7df', roughness: .8 })
-    ]);
-    m.position.set(4.1, 0.4, 2.3); m.rotation.y = 0.42;
-    scene.add(m);
-    return m;
-  })();
-
-  // ---------- hand ----------
-  const rig = new THREE.Group(); scene.add(rig);
-  const hand = new THREE.Group();
-  hand.rotation.x = -Math.PI / 2 + 0.1; // lay the hand flat, nails up
-  hand.position.set(-0.35, 0.5, 0.2);
-  rig.add(hand);
-  const skin = new THREE.MeshPhysicalMaterial({
-    color: design.tone, roughness: 0.48, sheen: 0.55, sheenColor: new THREE.Color('#ffd2c6'), sheenRoughness: 0.5,
-    clearcoat: 0.08, clearcoatRoughness: 0.6
-  });
-  // fingers are lathed with a soft knuckle and a tapered, rounded tip
-  function fingerGeo(R, len) {
-    const pts = [];
-    for (let k = 0; k <= 40; k++) {
-      const t = k / 40, y = -len + t * len;
-      const knuckle = Math.exp(-Math.pow((t - 0.42) / 0.09, 2)) * 0.05 + Math.exp(-Math.pow((t - 0.78) / 0.07, 2)) * 0.025;
-      pts.push(new THREE.Vector2(R * (1.03 - 0.1 * t + knuckle), y));
-    }
-    for (let k = 1; k <= 16; k++) { const a = k / 16 * Math.PI / 2; pts.push(new THREE.Vector2(R * 0.93 * Math.cos(a), R * 0.93 * Math.sin(a) * 1.08)); }
-    const g = new THREE.LatheGeometry(pts, 56);
-    return g;
+  // ---------- auto painting: the brush sweeps three strokes per nail ----------
+  const queue = []; let job = null;
+  function autoPaint(indices, hex, name) {
+    indices.forEach(i => { design.nailColors[NAILS[i].slot] = []; queue.push({ i, hex, name: name || design.color[0] }); });
+    kick();
   }
-  const FINGERS = [
-    { x: -2.0, tip: 0.55, R: 0.40, rz: 0.17, ry: 0.0, len: 3.4 },
-    { x: -1.0, tip: 1.35, R: 0.465, rz: 0.06, ry: 0.0, len: 4.2 },
-    { x: 0.05, tip: 1.7, R: 0.49, rz: -0.01, ry: 0, len: 4.5 },
-    { x: 1.1, tip: 1.32, R: 0.465, rz: -0.09, ry: 0, len: 4.2 },
-    { x: 2.35, tip: -1.2, R: 0.54, rz: -0.95, ry: -0.9, len: 2.6 }
-  ];
-  const nails = [];
-  FINGERS.forEach((f, i) => {
-    const pivot = new THREE.Group();
-    const baseY = f.tip - f.len - f.R;
-    pivot.position.set(f.x, baseY, i === 4 ? 0.1 : 0);
-    pivot.rotation.set(0, f.ry, f.rz);
-    hand.add(pivot);
-    const finger = new THREE.Mesh(fingerGeo(f.R, f.len), skin);
-    finger.position.y = f.len;     // tip sits at local y = len + R*0.93
-    finger.scale.set(1.04, 1, 0.8);
-    pivot.add(finger);
-    const tipY = f.len + f.R * 0.93;
-    const nailGroup = new THREE.Group();
-    nailGroup.position.set(0, tipY - f.R * 1.95, f.R * 0.8 * 0.99);
-    pivot.add(nailGroup);
-    const paint = makeCanvas(); const art = makeCanvas(); const metal = makeCanvas();
-    const mat = makeNailMaterial(paint.tex, art.tex, metal.tex);
-    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-    mesh.userData.index = i;
-    nailGroup.add(mesh);
-    const gems = new THREE.Group(); nailGroup.add(gems);
-    nails.push({ f, pivot, finger, group: nailGroup, mesh, mat, paint, art, metal, gems, baseZ: f.R * 0.8 * 0.99 });
-  });
-  // back of the hand
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), skin);
-  palm.scale.set(2.45, 2.35, 0.5);
-  palm.position.set(0.1, -3.7, -0.12);
-  hand.add(palm);
-  const thumbBase = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), skin);
-  thumbBase.scale.set(0.85, 1.4, 0.5); thumbBase.position.set(1.95, -3.9, -0.05); thumbBase.rotation.z = -0.8;
-  hand.add(thumbBase);
-
-  // soft contact shadow under the hand and card, painted into the fur
-  function drawShadows() {
-    rig.updateMatrixWorld(true);
-    const g = shadowCanvas.getContext('2d');
-    g.clearRect(0, 0, 512, 384); g.fillStyle = '#000'; g.fillRect(0, 0, 512, 384);
-    const toPx = v => [(v.x / FUR_W + 0.5) * 512, (v.z / FUR_D + 0.5) * 384];
-    const blob = (v, r, a) => {
-      const [x, y] = toPx(v), rp = r / FUR_W * 512;
-      const rg = g.createRadialGradient(x, y, 0, x, y, rp); rg.addColorStop(0, `rgba(255,255,255,${a})`); rg.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = rg; g.beginPath(); g.arc(x, y, rp, 0, 7); g.fill();
-    };
-    nails.forEach(n => {
-      for (let t = 0; t <= 1.001; t += 0.08) {
-        const v = new THREE.Vector3(0, n.f.len * t + (t === 1 ? n.f.R * 0.6 : 0), 0).applyMatrix4(n.pivot.matrixWorld);
-        blob(v, n.f.R * 1.9, 0.22);
-      }
-    });
-    for (let k = 0; k < 9; k++) blob(new THREE.Vector3((k % 3 - 1) * 0.6, (Math.floor(k / 3) - 1) * 0.6, 0).applyMatrix4(palm.matrixWorld), 1.9, 0.24);
-    card.updateMatrixWorld();
-    for (let x = -1.3; x <= 1.31; x += 0.4) for (let z = -0.7; z <= 0.71; z += 0.35) blob(new THREE.Vector3(x, 0, z).applyMatrix4(card.matrixWorld), 0.6, 0.18);
-    shadowTex.needsUpdate = true;
-  }
-
-  function makeCanvas() {
-    const c = document.createElement('canvas'); c.width = c.height = TEX;
-    const ctx = c.getContext('2d');
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-    return { c, ctx, tex };
-  }
-
-  // ---------- nail geometry ----------
-  const SHAPE_LEN = { square: 1.3, round: 1.32, almond: 1.72, coffin: 1.9, stiletto: 2.1 };
-  function outline(shape, w) {
-    const a = w / 2, L = SHAPE_LEN[shape] * w, s = new THREE.Shape();
-    s.moveTo(-a, 0.24 * w);
-    s.bezierCurveTo(-a, -0.05 * w, a, -0.05 * w, a, 0.24 * w);
-    switch (shape) {
-      case 'square':
-        s.lineTo(a, L - 0.1 * w); s.quadraticCurveTo(a, L, a - 0.1 * w, L);
-        s.lineTo(-a + 0.1 * w, L); s.quadraticCurveTo(-a, L, -a, L - 0.1 * w); break;
-      case 'round':
-        s.lineTo(a, L - 0.42 * w); s.bezierCurveTo(a, L - 0.08 * w, 0.45 * a, L, 0, L);
-        s.bezierCurveTo(-0.45 * a, L, -a, L - 0.08 * w, -a, L - 0.42 * w); break;
-      case 'almond':
-        s.lineTo(a, L * 0.5); s.bezierCurveTo(a, L * 0.8, 0.3 * a, L * 0.97, 0, L);
-        s.bezierCurveTo(-0.3 * a, L * 0.97, -a, L * 0.8, -a, L * 0.5); break;
-      case 'coffin':
-        s.lineTo(a, L * 0.5); s.lineTo(0.48 * a, L - 0.05 * w); s.quadraticCurveTo(0.44 * a, L, 0.36 * a, L);
-        s.lineTo(-0.36 * a, L); s.quadraticCurveTo(-0.44 * a, L, -0.48 * a, L - 0.05 * w); s.lineTo(-a, L * 0.5); break;
-      default: // stiletto
-        s.lineTo(a, L * 0.4); s.bezierCurveTo(a, L * 0.7, 0.07 * a, L * 0.95, 0, L);
-        s.bezierCurveTo(-0.07 * a, L * 0.95, -a, L * 0.7, -a, L * 0.4);
-    }
-    s.lineTo(-a, 0.24 * w);
-    return { shape: s, L };
-  }
-
-  function buildNail(shape, w, R) {
-    const { shape: s, L } = outline(shape, w);
-    const N = 160, M = 16, E = 8, h = 0.032;
-    const P = s.getSpacedPoints(N).slice(0, N);
-    const C = new THREE.Vector2(0, L * 0.4);
-    const tipStart = R * 1.85; // where the fingertip ends under the nail
-    const bend = (x, y) => {
-      let z = -(R - Math.sqrt(Math.max(R * R - x * x, 1e-4))) * 0.92;
-      if (y > tipStart) { const t = (y - tipStart) / w; z -= 0.07 * t * t; }
-      if (y < 0.18 * w) z -= 0.025 * (1 - y / (0.18 * w));
-      return z;
-    };
-    const nrm = P.map((p, k) => {
-      const a = P[(k + N - 1) % N], b = P[(k + 1) % N];
-      const n = new THREE.Vector2(b.y - a.y, -(b.x - a.x)).normalize();
-      if (n.dot(p.clone().sub(C)) < 0) n.negate();
-      return n;
-    });
-    const rows = [];
-    for (let j = 0; j <= M; j++) { const r = Math.pow(j / M, 0.85); rows.push(P.map(p => { const q = C.clone().lerp(p, r); return [q.x, q.y, h + bend(q.x, q.y)]; })); }
-    for (let e = 1; e < E; e++) { const a = Math.PI * e / E; rows.push(P.map((p, k) => { const q = p.clone().addScaledVector(nrm[k], h * Math.sin(a)); return [q.x, q.y, bend(p.x, p.y) + h * Math.cos(a)]; })); }
-    for (let j = M; j >= 0; j--) { const r = Math.pow(j / M, 0.85); rows.push(P.map(p => { const q = C.clone().lerp(p, r); return [q.x, q.y, -h + bend(q.x, q.y)]; })); }
-    const pos = [], uv = [], idx = [];
-    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-    P.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
-    rows.forEach(row => row.forEach(([x, y, z]) => { pos.push(x, y, z); uv.push((x - minX) / (maxX - minX), (y - minY) / (maxY - minY)); }));
-    for (let r = 0; r < rows.length - 1; r++) for (let k = 0; k < N; k++) {
-      const a = r * N + k, b = r * N + (k + 1) % N, c = (r + 1) * N + k, d = (r + 1) * N + (k + 1) % N;
-      idx.push(a, c, b, b, c, d);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    // make sure the front surface faces the camera
-    const nz = g.attributes.normal.getZ(N * Math.floor(M / 2));
-    if (nz < 0) { const ix = g.index.array; for (let t = 0; t < ix.length; t += 3) { const tmp = ix[t + 1]; ix[t + 1] = ix[t + 2]; ix[t + 2] = tmp; } g.computeVertexNormals(); }
-    g.userData = { minX, maxX, minY, maxY, L, w, h, bend };
-    return g;
-  }
-
-  function surface(nail, u, v) {
-    const d = nail.mesh.geometry.userData;
-    const x = d.minX + u * (d.maxX - d.minX), y = d.minY + v * (d.maxY - d.minY);
-    const z = d.h + d.bend(x, y);
-    const e = 0.01;
-    const n = new THREE.Vector3(-(d.bend(x + e, y) - d.bend(x - e, y)) / (2 * e), -(d.bend(x, y + e) - d.bend(x, y - e)) / (2 * e), 1).normalize();
-    return { p: new THREE.Vector3(x, y, z), n };
-  }
-
-  // ---------- nail material with custom shading ----------
-  function makeNailMaterial(paintTex, artTex, metalTex) {
-    const m = new THREE.MeshPhysicalMaterial({ roughness: 0.1, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.15 });
-    m.defines = { USE_UV: '' };
-    const u = {
-      uPaint: { value: paintTex }, uArt: { value: artTex }, uMetal: { value: metalTex },
-      uBare: { value: new THREE.Color('#f0cdc4') }, ...shared
-    };
-    m.userData.u = u;
-    m.onBeforeCompile = sh => {
-      Object.assign(sh.uniforms, u);
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', `#include <common>
-          uniform sampler2D uPaint; uniform sampler2D uArt; uniform sampler2D uMetal; uniform vec3 uBare;
-          uniform float uTime; uniform vec2 uMagDir; uniform float uMagOff;
-          float h21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
-          float gPaint; vec4 gP; float gGold;`)
-        .replace('#include <map_fragment>', `
-          gP = texture2D(uPaint, vUv);
-          vec4 art = texture2D(uArt, vUv);
-          vec4 met = texture2D(uMetal, vUv);
-          vec3 bare = mix(uBare, vec3(0.98, 0.94, 0.9), smoothstep(0.84, 0.97, vUv.y) * 0.8);
-          gPaint = gP.a;
-          vec3 col = mix(bare, gP.rgb, gP.a);
-          #ifdef CHROME
-            col = mix(col, vec3(1.0), 0.22 * gP.a);
-          #endif
-          #ifdef MATTE
-            col *= mix(1.0, 0.93, gP.a);
-          #endif
-          col = mix(col, art.rgb, art.a);
-          gGold = met.a;
-          col = mix(col, met.rgb, met.a);
-          diffuseColor.rgb = col;`)
-        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-          roughnessFactor = mix(roughnessFactor, 0.18, gGold);`)
-        .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-          metalnessFactor = mix(metalnessFactor, 1.0, gGold);`)
-        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-          #ifdef CATEYE
-          {
-            vec2 q = vUv - 0.5;
-            float d = dot(q, uMagDir) - uMagOff;
-            float band = exp(-d * d * 38.0);
-            float grain = h21(floor(vUv * vec2(240.0, 400.0)));
-            vec3 glow = mix(gP.rgb, vec3(1.0), 0.5);
-            totalEmissiveRadiance += glow * band * (0.35 + 1.1 * grain) * gPaint * 0.9;
-            diffuseColor.rgb *= mix(1.0, mix(0.38, 1.0, band), gPaint);
-          }
-          #endif
-          #ifdef GLITTER
-          {
-            vec2 cell = floor(vUv * vec2(70.0, 120.0));
-            float r1 = h21(cell);
-            vec3 rn = vec3(h21(cell + 1.3), h21(cell + 7.1), h21(cell + 3.7)) - 0.5;
-            vec3 fn = normalize(normal + rn * 1.8);
-            vec3 V = normalize(vViewPosition);
-            vec3 L = normalize(vec3(0.35 + 0.35 * sin(uTime * 0.9), 0.75, 0.55));
-            vec3 H = normalize(L + V);
-            float sp = pow(max(dot(fn, H), 0.0), 70.0) * step(0.35, r1);
-            vec3 fc = mix(vec3(1.0, 0.86, 0.6), vec3(1.0, 0.75, 0.9), h21(cell + 9.0));
-            fc = mix(fc, vec3(1.0), 0.4);
-            totalEmissiveRadiance += fc * sp * 7.0 * gPaint;
-            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.8 + 0.4 * r1), gPaint);
-          }
-          #endif
-          totalEmissiveRadiance += met.rgb * gGold * 0.08;`);
-    };
-    return m;
-  }
-
-  function applyFinish() {
-    const f = design.finish;
-    nails.forEach(n => {
-      const m = n.mat;
-      m.defines = { USE_UV: '' };
-      Object.assign(m, { roughness: 0.1, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, iridescence: 0, transmission: 0, sheen: 0, thickness: 0 });
-      if (f === 'cateye') { m.defines.CATEYE = ''; m.roughness = 0.22; m.metalness = 0.12; }
-      if (f === 'chrome') { m.defines.CHROME = ''; Object.assign(m, { metalness: 0.3, roughness: 0.12, iridescence: 1, iridescenceIOR: 1.85 }); m.iridescenceThicknessMinimum = 220; m.iridescenceThicknessMaximum = 680; }
-      if (f === 'glitter') { m.defines.GLITTER = ''; m.roughness = 0.28; m.metalness = 0.2; }
-      if (f === 'jelly') { Object.assign(m, { transmission: 0.62, thickness: 0.5, ior: 1.5, roughness: 0.04 }); }
-      if (f === 'matte') { m.defines.MATTE = ''; Object.assign(m, { roughness: 0.62, clearcoat: 0, sheen: 0.6, sheenRoughness: 0.45 }); m.sheenColor = new THREE.Color('#ffffff'); }
-      m.needsUpdate = true;
-    });
-  }
-
-  // ---------- painting ----------
-  function texPos(nail, u, v) { return [u * TEX, (1 - v) * TEX]; }
-  function aspect(nail) { const d = nail.mesh.geometry.userData; return (d.maxX - d.minX) / (d.maxY - d.minY); }
-  function stamp(nail, u, v, hex, radius) {
-    const ctx = nail.paint.ctx; const [x, y] = texPos(nail, u, v);
-    const ry = radius * TEX, rx = ry / aspect(nail) * aspect(nail) ; // radius in u space
-    ctx.save(); ctx.translate(x, y); ctx.scale(1, aspect(nail));
-    ctx.fillStyle = hex;
-    // a polish brush leaves a flat, slightly streaky stroke
-    ctx.globalAlpha = 0.95; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 0.25;
-    for (let k = 0; k < 4; k++) { ctx.beginPath(); ctx.arc((Math.random() - .5) * rx * 1.4, (Math.random() - .5) * rx * 0.6, rx * 0.55, 0, Math.PI * 2); ctx.fill(); }
-    ctx.restore();
-    nail.paint.tex.needsUpdate = true;
-  }
-  function strokeTo(nail, from, to, hex, radius) {
-    const dx = to[0] - from[0], dy = (to[1] - from[1]) / aspect(nail);
-    const dist = Math.hypot(dx, dy), steps = Math.max(1, Math.ceil(dist / (radius * 0.3)));
-    for (let s = 1; s <= steps; s++) { const t = s / steps; stamp(nail, from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, hex, radius); }
-  }
-  function pushName(i, name, replace) {
-    const list = design.nailColors[i];
-    if (replace) list.length = 0;
-    if (list[list.length - 1] !== name) { list.push(name); if (list.length > 3) list.shift(); }
-  }
-  const recordColor = i => pushName(i, design.color[0]);
-
-  // ---------- nail art ----------
-  function drawArt(i) {
-    const n = nails[i], A = n.art.ctx, G = n.metal.ctx;
-    A.clearRect(0, 0, TEX, TEX); G.clearRect(0, 0, TEX, TEX);
-    n.gems.clear();
-    const kind = design.art;
-    const accent = i === ACCENT;
-    const asp = aspect(n);
-    const base = design.nailColors[i].length ? design.color[1] : '#f0cdc4';
-    const light = lum(paintColorAt(i)) > 0.6;
-    const S = TEX;
-    const ell = (ctx, cx, cy, fn) => { ctx.save(); ctx.translate(cx * S, (1 - cy) * S); ctx.scale(1, asp); fn(ctx); ctx.restore(); };
-    if (kind === 'french') {
-      A.fillStyle = '#fbf8f3';
-      A.beginPath(); A.moveTo(0, 0); A.lineTo(S, 0); A.lineTo(S, S * 0.3); A.quadraticCurveTo(S / 2, S * 0.48, 0, S * 0.3); A.closePath(); A.fill();
-    }
-    if (!accent || kind === 'none' || kind === 'french') { n.art.tex.needsUpdate = n.metal.tex.needsUpdate = true; return; }
-    const R = S * 0.4; // drawing radius in u-space pixels
-    if (kind === 'daisy' || kind === 'sunflower') {
-      ell(A, 0.5, 0.5, c => {
-        const petals = kind === 'daisy' ? 9 : 14, pl = R * (kind === 'daisy' ? 0.62 : 0.6), pw = R * (kind === 'daisy' ? 0.2 : 0.15);
-        for (let p = 0; p < petals; p++) {
-          c.save(); c.rotate(p / petals * Math.PI * 2);
-          const g = c.createLinearGradient(0, 0, 0, -pl);
-          if (kind === 'daisy') { g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#fff6fa'); } else { g.addColorStop(0, '#e38a0e'); g.addColorStop(1, '#ffd23f'); }
-          c.fillStyle = g; c.beginPath(); c.ellipse(0, -pl * 0.55, pw, pl * 0.5, 0, 0, Math.PI * 2); c.fill();
-          c.strokeStyle = 'rgba(0,0,0,.08)'; c.lineWidth = 2; c.stroke();
-          c.restore();
-        }
-        const cg = c.createRadialGradient(-R * .05, -R * .05, 2, 0, 0, R * (kind === 'daisy' ? 0.2 : 0.3));
-        if (kind === 'daisy') { cg.addColorStop(0, '#ffe680'); cg.addColorStop(1, '#f1a805'); } else { cg.addColorStop(0, '#7a4a22'); cg.addColorStop(1, '#3d220e'); }
-        c.fillStyle = cg; c.beginPath(); c.arc(0, 0, R * (kind === 'daisy' ? 0.18 : 0.28), 0, Math.PI * 2); c.fill();
-      });
-    } else if (kind === 'starfish') {
-      ell(A, 0.5, 0.48, c => {
-        c.rotate(0.2); c.beginPath();
-        for (let k = 0; k < 10; k++) { const r = k % 2 ? R * 0.28 : R * 0.72, a = -Math.PI / 2 + k * Math.PI / 5; c.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
-        c.closePath(); const g = c.createRadialGradient(0, 0, 4, 0, 0, R * 0.7); g.addColorStop(0, '#ffc15a'); g.addColorStop(1, '#e8851f');
-        c.fillStyle = g; c.fill(); c.lineJoin = 'round'; c.strokeStyle = '#c96a16'; c.lineWidth = 4; c.stroke();
-        c.fillStyle = '#fff4dc';
-        for (let k = 0; k < 5; k++) { const a = -Math.PI / 2 + k * Math.PI * 2 / 5; for (let t = 1; t <= 3; t++) { c.beginPath(); c.arc(Math.cos(a) * R * 0.17 * t, Math.sin(a) * R * 0.17 * t, 3.2, 0, 7); c.fill(); } }
-      });
-    } else if (kind === 'dots') {
-      A.fillStyle = light ? '#18181c' : '#ffffff';
-      for (let r = 0; r < 9; r++) for (let c = 0; c < 6; c++) {
-        const u = (c + (r % 2) * 0.5 + 0.25) / 5.5, v = (r + 0.4) / 8.5;
-        ell(A, u, v, x => { x.beginPath(); x.arc(0, 0, S * 0.045, 0, 7); x.fill(); });
-      }
-    } else if (kind === 'heart') {
-      ell(A, 0.5, 0.48, c => {
-        const s = R * 0.022; c.scale(s, s); c.beginPath();
-        c.moveTo(0, 12); c.bezierCurveTo(-18, 0, -14, -14, -5, -14); c.bezierCurveTo(-1, -14, 0, -10, 0, -8);
-        c.bezierCurveTo(0, -10, 1, -14, 5, -14); c.bezierCurveTo(14, -14, 18, 0, 0, 12); c.closePath();
-        c.fillStyle = light ? '#d4157a' : '#ffffff'; c.fill();
-      });
-      ell(G, 0.5, 0.48, c => { c.strokeStyle = '#d8b25a'; c.lineWidth = 5; const s = R * 0.022; c.scale(s, s); c.lineWidth = 5 / s; c.beginPath();
-        c.moveTo(0, 12); c.bezierCurveTo(-18, 0, -14, -14, -5, -14); c.bezierCurveTo(-1, -14, 0, -10, 0, -8);
-        c.bezierCurveTo(0, -10, 1, -14, 5, -14); c.bezierCurveTo(14, -14, 18, 0, 0, 12); c.stroke(); });
-    } else if (kind === 'swirl') {
-      G.strokeStyle = '#e1bd63'; G.lineCap = 'round';
-      const path = [[0.15, 0.05], [0.7, 0.3], [0.25, 0.55], [0.8, 0.8], [0.45, 1.0]];
-      G.save(); G.scale(1, 1);
-      G.lineWidth = S * 0.035; G.beginPath();
-      G.moveTo(path[0][0] * S, (1 - path[0][1]) * S);
-      for (let k = 1; k < path.length; k++) { const p0 = path[k - 1], p1 = path[k]; G.quadraticCurveTo(p0[0] * S + (k % 2 ? 1 : -1) * S * 0.35, (1 - (p0[1] + p1[1]) / 2) * S, p1[0] * S, (1 - p1[1]) * S); }
-      G.stroke(); G.lineWidth = S * 0.015; G.globalAlpha = 0.8; G.translate(S * 0.06, 0); G.stroke(); G.restore();
-      for (let k = 0; k < 14; k++) { G.beginPath(); G.arc(Math.random() * S, Math.random() * S, 2 + Math.random() * 5, 0, 7); G.fillStyle = '#e8c878'; G.fill(); }
-    } else if (kind === 'gems') {
-      addGem(n, 0.5, 0.24, 0.19);
-      addGem(n, 0.24, 0.16, 0.1); addGem(n, 0.76, 0.16, 0.1);
-      addGem(n, 0.5, 0.45, 0.085); addGem(n, 0.5, 0.6, 0.06);
-      ell(G, 0.5, 0.24, c => { c.strokeStyle = '#d9b45c'; c.lineWidth = 8; c.beginPath(); c.arc(0, 0, S * 0.2, 0, 7); c.stroke(); });
-    }
-    n.art.tex.needsUpdate = n.metal.tex.needsUpdate = true;
-  }
-
-  const gemGeo = (() => {
-    const pts = [new THREE.Vector2(0, -0.55), new THREE.Vector2(1, 0), new THREE.Vector2(0.92, 0.12), new THREE.Vector2(0.55, 0.3), new THREE.Vector2(0, 0.3)];
-    const g = new THREE.LatheGeometry(pts, 10); g.rotateX(Math.PI / 2); return g.toNonIndexed();
-  })();
-  gemGeo.computeVertexNormals();
-  const gemMat = new MeshTransmissionMaterial({ transmissionSampler: true, chromaticAberration: 0.9, transmission: 1, roughness: 0, thickness: 0.4, anisotropicBlur: 0.05, distortion: 0, distortionScale: 0, temporalDistortion: 0 });
-  Object.assign(gemMat, { ior: 2.2, color: new THREE.Color('#ffffff'), iridescence: 0.7, iridescenceIOR: 1.6, flatShading: true, envMapIntensity: 2.2, specularIntensity: 1, clearcoat: 1 });
-  function addGem(n, u, v, size) {
-    const { p, nrm } = (() => { const s = surface(n, u, v); return { p: s.p, nrm: s.n }; })();
-    const g = new THREE.Mesh(gemGeo, gemMat);
-    const sc = size * (n.mesh.geometry.userData.w);
-    g.scale.setScalar(sc * 3.2);
-    g.position.copy(p).addScaledVector(nrm, sc * 0.9);
-    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), nrm);
-    g.rotateZ(Math.random() * Math.PI);
-    n.gems.add(g);
-  }
-
-  function lum(hex) { const c = new THREE.Color(hex); return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b; }
-  function paintColorAt(i) {
-    const names = design.nailColors[i];
-    return names.length ? (nails[i].lastHex || design.color[1]) : '#f0cdc4';
-  }
-
-  function rebuild() {
-    nails.forEach(n => {
-      const w = n.f.R * 1.28;
-      n.mesh.geometry.dispose();
-      n.mesh.geometry = buildNail(design.shape, w, n.f.R * 0.82);
-    });
-    nails.forEach((_, i) => drawArt(i));
-  }
-
-  // ---------- the polish brush ----------
-  const brush = new THREE.Group();
-  const capMat = new THREE.MeshPhysicalMaterial({ color: '#0c0c0e', roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0, envMapIntensity: 0.35 });
-  const goldMat = new THREE.MeshPhysicalMaterial({ color: '#e6c27a', roughness: 0.22, metalness: 1 });
-  const bristleMat = new THREE.MeshPhysicalMaterial({ color: design.color[1], roughness: 0.15, clearcoat: 1 });
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.19, 1.5, 32), capMat); cap.position.y = 1.42;
-  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12, 32), goldMat); ring.position.y = 0.66;
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.5, 12), goldMat); stem.position.y = 0.38;
-  const bristles = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.03, 0.26, 24), bristleMat); bristles.position.y = 0.12; bristles.scale.z = 0.45;
-  brush.add(cap, ring, stem, bristles);
-  brush.scale.setScalar(0.85);
-  brush.visible = false;
-  scene.add(brush);
-  const brushTarget = new THREE.Vector3(), brushNormal = new THREE.Vector3(0, 0, 1);
-  function placeBrush(worldPoint, worldNormal) {
-    brushTarget.copy(worldPoint).addScaledVector(worldNormal, 0.02);
-    brushNormal.copy(worldNormal);
-  }
-  function updateBrush(dt) {
-    if (!brush.visible) return;
-    brush.position.lerp(brushTarget, 1 - Math.pow(0.0001, dt));
-    const up = brushNormal.clone().multiplyScalar(0.5).add(new THREE.Vector3(0.62, 0, 0.6)).normalize();
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-    brush.quaternion.slerp(q, 1 - Math.pow(0.001, dt));
-  }
-
-  // ---------- auto painting (brush sweeps the nail in three strokes) ----------
-  const queue = [];
-  let job = null;
-  function autoPaint(indices, hex) {
-    indices.forEach(i => { design.nailColors[i] = []; queue.push({ i, hex, t: 0 }); });
-  }
-  const STROKES = [[0.5, -0.05, 0.5, 1.05], [0.22, 0.0, 0.2, 1.02], [0.78, 0.0, 0.8, 1.02]];
   function runJobs(dt) {
-    if (!job && queue.length) { job = queue.shift(); job.last = null; job.s = 0; nails[job.i].lastHex = job.hex; pushName(job.i, job.name || design.color[0]); }
+    if (!job && queue.length) {
+      job = queue.shift(); setColor(job.i, job.hex); nails[job.i].prog = 0; nails[job.i].manual = 0; pushName(job.i, job.name);
+      brushOn(true);
+    }
     if (!job) return false;
     const n = nails[job.i];
-    const speed = reduceMotion ? 50 : 3.6;
-    job.t += dt * speed;
-    while (job.t >= 1 && job.s < STROKES.length) { finishStroke(); }
-    if (job.s >= STROKES.length) { done(); return true; }
-    const [u0, v0, u1, v1] = STROKES[job.s];
-    const u = u0 + (u1 - u0) * job.t, v = v0 + (v1 - v0) * easeInOut(job.t);
-    const r = 0.17;
-    if (job.last) strokeTo(n, job.last, [u, v], job.hex, r); else stamp(n, u, v, job.hex, r);
-    job.last = [u, v];
-    const s = surface(n, Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v)));
-    n.mesh.updateWorldMatrix(true, false);
-    placeBrush(s.p.clone().applyMatrix4(n.mesh.matrixWorld), s.n.clone().transformDirection(n.mesh.matrixWorld));
-    brush.visible = true;
+    n.prog = Math.min(3, n.prog + dt * (reduceMotion ? 60 : 3.4));
+    const k = Math.min(2, Math.floor(n.prog)), f = n.prog - k;
+    const cx = [0, -0.55, 0.55][k], L = tipLen() + 0.05;
+    moveBrush(job.i, cx, Math.min(L, f * L));
+    if (n.prog >= 3) {
+      n.prev = [0, 0, 0, 0]; n.pulse = 1; burst(job.i); job = null;
+      if (!queue.length) { setTimeout(() => { if (!job && !queue.length && !drag) brushOn(false); }, 450); emit('painted'); }
+    }
     return true;
-    function finishStroke() {
-      const [a0, b0, a1, b1] = STROKES[job.s];
-      strokeTo(n, job.last || [a0, b0], [a1, b1], job.hex, r0());
-      job.s++; job.t -= 1; job.last = null;
-    }
-    function done() {
-      // flood any tiny gaps so the coat looks finished
-      const ctx = n.paint.ctx; ctx.save(); ctx.globalAlpha = 1; ctx.fillStyle = job.hex; ctx.fillRect(0, 0, TEX, TEX); ctx.restore();
-      n.paint.tex.needsUpdate = true;
-      drawArt(job.i);
-      pulse(job.i);
-      job = null;
-      if (!queue.length) { setTimeout(() => { if (!queue.length && !dragging) brush.visible = false; }, 500); emit('painted'); }
-    }
   }
-  const r0 = () => 0.17;
-  const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  const tipLen = () => [1.06, 1.04, 1.14, 1.2, 1.36][SHAPE[design.shape] ?? 2];
 
-  // little celebratory lift on the nail
-  const pulses = [0, 0, 0, 0, 0];
-  function pulse(i) { pulses[i] = 1; }
+  // ---------- view: fit all eight nails, fill the stage ----------
+  let W = 1, H = 1, dpr = 1, scale = 1, off = [0, 0];
+  function resize() {
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    W = container.clientWidth; H = container.clientHeight;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    const cover = Math.max(W / PHOTO.w, H / PHOTO.h);
+    const fitBox = Math.min(W / ((BOX.x1 - BOX.x0) * PHOTO.w), (H * 0.86) / ((BOX.y1 - BOX.y0) * PHOTO.h));
+    scale = Math.max(cover, Math.min(fitBox, cover * 1.6));
+    const cx = (BOX.x0 + BOX.x1) / 2 * PHOTO.w, cy = (BOX.y0 + BOX.y1) / 2 * PHOTO.h;
+    off = [W / 2 - cx * scale, H * 0.46 - cy * scale];
+    off[0] = Math.min(0, Math.max(W - PHOTO.w * scale, off[0])); off[1] = Math.min(0, Math.max(H - PHOTO.h * scale, off[1]));
+    kick();
+  }
+  const toScreen = (px, py) => [off[0] + px * scale, off[1] + py * scale];
+  const toPhoto = (sx, sy) => [(sx - off[0]) / scale, (sy - off[1]) / scale];
+  function nailPoint(i, x, v) {             // nail-local → screen px
+    const n = NAILS[i], ax = n.ax, pr = [-ax[1], ax[0]];
+    const t = n.base + v * (n.tip - n.base), uu = x * n.hw;
+    const px = n.c[0] * PHOTO.w + (ax[0] * t + pr[0] * uu) * PHOTO.w, py = n.c[1] * PHOTO.h + (ax[1] * t + pr[1] * uu) * PHOTO.w;
+    return toScreen(px, py);
+  }
+  function nailAt(sx, sy) {
+    const [px, py] = toPhoto(sx, sy); const p = [px / PHOTO.w, py / PHOTO.w];
+    let best = -1, bd = 1e9;
+    NAILS.forEach((n, i) => {
+      const c = [n.c[0], n.c[1] * PHOTO.h / PHOTO.w], d = [p[0] - c[0], p[1] - c[1]];
+      const t = d[0] * n.ax[0] + d[1] * n.ax[1], uu = -d[0] * n.ax[1] + d[1] * n.ax[0];
+      const v = (t - n.base) / (n.tip - n.base);
+      if (v > -0.25 && v < tipLen() + 0.1 && Math.abs(uu) < n.hw * 1.35) { const dd = Math.abs(uu) / n.hw + Math.abs(v - 0.5); if (dd < bd) { bd = dd; best = i; } }
+    });
+    return best;
+  }
+
+  // ---------- brush (a little polish brush that follows the stroke) ----------
+  const brush = document.createElement('div');
+  brush.className = 'studio-brush'; brush.setAttribute('aria-hidden', 'true');
+  brush.innerHTML = '<svg viewBox="0 0 40 120" width="40" height="120"><defs><linearGradient id="bcap" x1="0" x2="1"><stop offset="0" stop-color="#2a1d22"/><stop offset=".45" stop-color="#6b5960"/><stop offset="1" stop-color="#1c1317"/></linearGradient></defs><rect x="11" y="0" width="18" height="70" rx="5" fill="url(#bcap)"/><rect x="17" y="68" width="6" height="22" fill="#d8c8b8"/><path class="bb" d="M13 88 Q20 84 27 88 L25 112 Q20 120 15 112 Z"/></svg>';
+  container.appendChild(brush);
+  let brushVisible = false;
+  function brushOn(v) { brushVisible = v; brush.classList.toggle('on', v); }
+  function moveBrush(i, x, v) {
+    const [sx, sy] = nailPoint(i, x, v);
+    brush.style.transform = `translate(${sx - 20}px, ${sy - 116}px) rotate(18deg)`;
+    brush.style.setProperty('--bc', '#' + nails[i].col.slice(0, 3).map(c => Math.round(c * 255).toString(16).padStart(2, '0')).join(''));
+  }
+  function burst(i) {
+    const r = canvas.getBoundingClientRect(); const [sx, sy] = nailPoint(i, 0, 0.6);
+    window.sparkleBurst && window.sparkleBurst(r.left + sx, r.top + sy, 10);
+  }
 
   // ---------- interaction ----------
-  const ray = new THREE.Raycaster();
-  const ndc = new THREE.Vector2();
-  let dragging = null, downAt = null, hovering = false;
-  const el = renderer.domElement;
-  function hit(e) {
-    const r = el.getBoundingClientRect();
-    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    const hits = ray.intersectObjects(nails.map(n => n.mesh), false);
-    return hits[0] || null;
-  }
-  el.addEventListener('pointerdown', e => {
-    const h = hit(e);
-    if (!h) return;
-    el.setPointerCapture(e.pointerId);
-    const i = h.object.userData.index;
-    dragging = { i, last: [h.uv.x, h.uv.y], moved: 0 };
-    downAt = [e.clientX, e.clientY];
-    nails[i].lastHex = design.color[1]; recordColor(i); design.rainbow = false;
-    stamp(nails[i], h.uv.x, h.uv.y, design.color[1], 0.16);
-    placeBrush(h.point, h.face.normal.clone().transformDirection(h.object.matrixWorld));
-    brush.visible = true;
+  let drag = null, light = [0, 0], lightT = [0, 0], lastMove = 0;
+  const local = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  canvas.addEventListener('pointerdown', e => {
+    const [sx, sy] = local(e); const i = nailAt(sx, sy); if (i < 0) return;
+    drag = { i, moved: 0, last: [sx, sy], started: false }; canvas.setPointerCapture(e.pointerId);
   });
-  el.addEventListener('pointermove', e => {
-    const r = el.getBoundingClientRect();
-    tiltTarget.set(((e.clientX - r.left) / r.width) - 0.5, ((e.clientY - r.top) / r.height) - 0.5);
-    magTarget = 0.42 * (((e.clientX - r.left) / r.width) - 0.5) * 2;
-    lastMove = performance.now();
-    const h = hit(e);
-    if (dragging) {
-      dragging.moved += Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]); downAt = [e.clientX, e.clientY];
-      if (h && h.object.userData.index === dragging.i) {
-        strokeTo(nails[dragging.i], dragging.last, [h.uv.x, h.uv.y], design.color[1], 0.16);
-        dragging.last = [h.uv.x, h.uv.y];
-        placeBrush(h.point, h.face.normal.clone().transformDirection(h.object.matrixWorld));
-      }
+  canvas.addEventListener('pointermove', e => {
+    const [sx, sy] = local(e);
+    lightT = [(sx / W - 0.5) * 2, (sy / H - 0.5) * 2]; lastMove = performance.now(); kick();
+    if (!drag) {
+      if (e.pointerType === 'mouse') canvas.style.cursor = nailAt(sx, sy) >= 0 ? 'pointer' : 'default';
       return;
     }
-    if (e.pointerType === 'mouse') {
-      hovering = !!h;
-      if (h && !job) { placeBrush(h.point, h.face.normal.clone().transformDirection(h.object.matrixWorld)); brush.visible = true; }
-      else if (!job) brush.visible = false;
-      el.style.cursor = h ? 'none' : 'default';
+    drag.moved += Math.hypot(sx - drag.last[0], sy - drag.last[1]);
+    if (drag.moved > 8) {
+      const i = drag.i, n = nails[i];
+      if (!drag.started) {
+        drag.started = true; setColor(i, design.color[1]); n.prog = 2.999; n.manual = 1; n.prev = n.prev[3] ? n.prev : [0, 0, 0, 0];
+        if (!n.prev[3]) n.prev = [0, 0, 0, 0];
+        // start this nail's brush layer fresh
+        const nb = NAILS[i]; pctx.save(); pctx.globalCompositeOperation = 'destination-out';
+        pctx.beginPath(); pctx.arc(nb.c[0] * paint.width, nb.c[1] * paint.height, (nb.tip - nb.base + nb.hw) * paint.width * 1.6, 0, 7); pctx.fill(); pctx.restore();
+        n.prog = 0; pushName(i, design.color[0]); brushOn(true);
+      }
+      const [ax, ay] = toPhoto(drag.last[0], drag.last[1]), [bx, by] = toPhoto(sx, sy);
+      pctx.strokeStyle = '#fff'; pctx.lineCap = 'round'; pctx.lineWidth = NAILS[i].hw * PHOTO.w * 0.5 * 1.1;
+      pctx.beginPath(); pctx.moveTo(ax / 2, ay / 2); pctx.lineTo(bx / 2, by / 2); pctx.stroke(); uploadPaint();
+      brush.style.transform = `translate(${sx - 20}px, ${sy - 116}px) rotate(18deg)`;
     }
+    drag.last = [sx, sy];
   });
   const end = () => {
-    if (!dragging) return;
-    const { i, moved } = dragging;
-    dragging = null;
-    if (moved < 8) autoPaint([i], design.color[1]);
-    else { drawArt(i); emit('painted'); onTip && onTip('Gorgeous. Keep brushing, or tap a nail to give it a full coat.'); }
-    if (!hovering && !job) setTimeout(() => { if (!job && !dragging) brush.visible = false; }, 400);
+    if (!drag) return;
+    const { i, moved, started } = drag; drag = null;
+    if (moved <= 8) autoPaint([i], design.color[1], design.color[0]);
+    else if (started) { emit('painted'); setTimeout(() => { if (!job && !drag) brushOn(false); }, 350); onTip && onTip('Gorgeous. Keep brushing, or tap a nail to give it a full coat.'); }
   };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-  el.addEventListener('pointerleave', () => { hovering = false; if (!job && !dragging) brush.visible = false; });
+  canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
+  addEventListener('deviceorientation', e => { if (e.gamma == null) return; lightT = [Math.max(-1, Math.min(1, e.gamma / 35)), Math.max(-1, Math.min(1, (e.beta - 45) / 40))]; lastMove = performance.now(); });
 
-  // cat-eye magnet follows your finger, or the tilt of your phone
-  let magTarget = 0, lastMove = 0;
-  const tiltTarget = new THREE.Vector2(), tilt = new THREE.Vector2();
-  addEventListener('deviceorientation', e => {
-    if (e.gamma == null) return;
-    magTarget = Math.max(-0.4, Math.min(0.4, e.gamma / 60));
-    tiltTarget.set(e.gamma / 90, (e.beta - 45) / 120);
-    lastMove = performance.now();
-  });
-
-  // ---------- layout ----------
-  function resize() {
-    const w = container.clientWidth, h = container.clientHeight;
-    renderer.setSize(w, h, false);
-    composer.setSize(w, h);
-    camera.aspect = w / h;
-    // fit the five fingertips in view on narrow phones
-    const needW = camera.aspect < 0.8 ? 5.8 : 7.0, needH = 4.9;
-    const vfov = THREE.MathUtils.degToRad(camera.fov);
-    const distH = needH / 2 / Math.tan(vfov / 2);
-    const distW = needW / 2 / (Math.tan(vfov / 2) * camera.aspect);
-    const dist = Math.max(distH, distW);
-    const dir = new THREE.Vector3(0, 0.82, 0.57).normalize();
-    camera.position.copy(camTarget).addScaledVector(dir, dist);
-    camera.lookAt(camTarget);
-    scene.fog.near = dist * 1.05; scene.fog.far = dist * 2.1; furMat.uniforms.uFogNear.value = dist * 1.05; furMat.uniforms.uFogFar.value = dist * 2.1;
-    camera.updateProjectionMatrix();
-    sparkles.setPixelRatio(renderer.getPixelRatio());
+  // ---------- design changes ----------
+  let toneMul = [1, 1, 1];
+  function applyTone() {
+    const lin = c => hexRgb(c).map(x => Math.pow(x, 2.2));
+    const ref = lin(TONES[1]), t = lin(design.tone);
+    toneMul = t.map((x, k) => x / ref[k]);
   }
-
-  // ---------- post ----------
-  const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.32, 0.55, 0.88);
-  composer.addPass(bloom);
-  composer.addPass(new OutputPass());
-
-  // ---------- loop ----------
-  const clock = { last: performance.now(), elapsedTime: 0, getDelta() { const n = performance.now(), d = (n - this.last) / 1000; this.last = n; this.elapsedTime += Math.min(d, 0.05); return d; } };
-  let running = false, visible = false;
-  function frame() {
-    if (!running) return;
-    const dt = Math.min(clock.getDelta(), 1 / 20);
-    const t = clock.elapsedTime;
-    shared.uTime.value = t;
-    // magnet drifts on its own when you aren't touching
-    if (performance.now() - lastMove > 2500 && !reduceMotion) { magTarget = Math.sin(t * 0.9) * 0.3; tiltTarget.set(Math.sin(t * 0.35) * 0.12, Math.cos(t * 0.27) * 0.08); }
-    shared.uMagOff.value += (magTarget - shared.uMagOff.value) * Math.min(1, dt * 6);
-    tilt.lerp(tiltTarget, Math.min(1, dt * 3));
-    if (!dragging) { rig.rotation.y = tilt.x * 0.22; rig.rotation.x = tilt.y * 0.05; }
-    nails.forEach((n, i) => {
-      pulses[i] = Math.max(0, pulses[i] - dt * 1.8);
-      const lift = Math.sin(pulses[i] * Math.PI) * 0.06;
-      n.group.position.z = n.baseZ + lift;
-      n.gems.children.forEach(g => g.rotateOnAxis(new THREE.Vector3(0, 0, 1), dt * 0.4));
-    });
-    hand.position.y = 0.5 + (reduceMotion ? 0 : Math.sin(t * 0.8) * 0.025);
-    runJobs(dt);
-    updateBrush(dt);
-    bristleMat.color.set(design.color[1]);
-    sparkles.update(t);
-    gemMat.uniforms && (gemMat.uniforms.time.value = t);
-    composer.render(dt);
-    requestAnimationFrame(frame);
-  }
-  function start() { if (running || !visible || document.hidden) return; running = true; clock.getDelta(); requestAnimationFrame(frame); }
-  function stop() { running = false; }
-  new IntersectionObserver(([en]) => { visible = en.isIntersecting; visible ? start() : stop(); }, { rootMargin: '100px' }).observe(container);
-  document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
-  new ResizeObserver(resize).observe(container);
-
-  // ---------- public API ----------
-  rebuild(); applyFinish(); resize(); drawShadows();
-  // first coat so the hand isn't bare
-  autoPaint([0, 1, 2, 3, 4], design.color[1]);
-
+  applyTone();
   onDesign(what => {
-    if (what === 'shape') rebuild();
-    if (what === 'finish') applyFinish();
-    if (what === 'art') nails.forEach((_, i) => drawArt(i));
-    if (what === 'tone') skin.color.set(design.tone);
+    if (what === 'tone') applyTone();
+    kick();
   });
 
-  onReady && onReady();
+  // ---------- render loop (runs only while visible) ----------
+  let raf = 0, visible = true, t0 = performance.now(), last = t0;
+  function frame(now) {
+    raf = 0;
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!ready || !visible) return;
+    // idle: the light drifts gently so the gloss breathes
+    if (!reduceMotion && now - lastMove > 2500) lightT = [Math.sin(now / 2600) * 0.55, Math.cos(now / 3400) * 0.3];
+    light = light.map((l, k) => l + (lightT[k] - l) * (1 - Math.pow(0.002, dt)));
+    const busy = runJobs(dt);
+    nails.forEach(n => { n.pulse = Math.max(0, n.pulse - dt * 1.8); });
+    gl.uniform2f(u('uRes'), canvas.width, canvas.height);
+    gl.uniform2f(u('uView'), scale * dpr, scale * dpr); gl.uniform2f(u('uOff'), off[0] * dpr, off[1] * dpr);
+    gl.uniform1f(u('uTime'), (now - t0) / 1000); gl.uniform2f(u('uLight'), light[0], light[1]);
+    gl.uniform1i(u('uFinish'), FINISH[design.finish] ?? 0); gl.uniform1i(u('uArt'), ART[design.art] ?? 0); gl.uniform1i(u('uShape'), SHAPE[design.shape] ?? 2);
+    gl.uniform3fv(u('uToneMul'), toneMul);
+    gl.uniform4fv(u('uCol'), nails.flatMap(n => n.col)); gl.uniform4fv(u('uPrev'), nails.flatMap(n => n.prev));
+    gl.uniform1fv(u('uProg'), nails.map(n => n.prog)); gl.uniform1fv(u('uManual'), nails.map(n => n.manual)); gl.uniform1fv(u('uPulse'), nails.map(n => n.pulse));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (!reduceMotion || busy || drag) kick();
+  }
+  function kick() { if (!raf && visible) raf = requestAnimationFrame(frame); }
+  new IntersectionObserver(([en]) => { visible = en.isIntersecting; if (visible) { last = performance.now(); kick(); } }).observe(container);
+  document.addEventListener('visibilitychange', () => { visible = !document.hidden; if (visible) kick(); });
+  new ResizeObserver(resize).observe(container);
+  resize();
+
   return {
-    paintAll(hex) { design.rainbow = false; queue.length = 0; autoPaint([0, 1, 2, 3, 4], hex || design.color[1]); },
-    paintSet(list) { design.rainbow = true; queue.length = 0; list.forEach((c, i) => { design.nailColors[i] = []; queue.push({ i, hex: c[1], t: 0, name: c[0] }); }); },
+    paintAll(hex) { design.rainbow = false; queue.length = 0; autoPaint(NAILS.map((_, i) => i), hex || design.color[1], design.color[0]); },
+    paintSet(list) {
+      design.rainbow = true; queue.length = 0;
+      NAILS.forEach((n, i) => { const c = list[n.slot % list.length]; design.nailColors[n.slot] = []; queue.push({ i, hex: c[1], name: c[0] }); });
+      kick();
+    },
     clear() {
-      queue.length = 0; job = null;
-      nails.forEach((n, i) => { n.paint.ctx.clearRect(0, 0, TEX, TEX); n.paint.tex.needsUpdate = true; design.nailColors[i] = []; drawArt(i); });
-      design.rainbow = false; emit('painted');
+      queue.length = 0; job = null; brushOn(false);
+      nails.forEach((n, i) => { n.col = [0, 0, 0, 0]; n.prev = [0, 0, 0, 0]; n.prog = 3; n.manual = 0; design.nailColors[NAILS[i].slot] = []; });
+      pctx.clearRect(0, 0, paint.width, paint.height); uploadPaint();
+      design.rainbow = false; emit('painted'); kick();
     },
     fingerName: i => FINGER_NAMES[i]
   };

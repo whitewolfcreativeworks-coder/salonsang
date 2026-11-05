@@ -124,7 +124,13 @@ body.lit .door::after{content:"";position:absolute;inset:0;background:var(--crea
 .eyebrow{font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold);font-weight:600;margin:0 0 6px}
 .stage{position:relative;margin:8px auto 0;width:min(1100px,100%);height:min(68svh,640px);min-height:420px;border-radius:0;overflow:hidden;touch-action:pan-y;-webkit-user-select:none;user-select:none}
 @media (min-width:760px){.stage{width:calc(100% - 40px);border-radius:32px;box-shadow:0 30px 80px rgba(176,42,98,.18),inset 0 0 0 1px rgba(255,255,255,.6)}}
-.studio-canvas{position:absolute;inset:0;width:100%!important;height:100%!important;display:block;opacity:0;transition:opacity 1.2s}
+.studio-canvas{position:absolute;inset:0;width:100%!important;height:100%!important;display:block;opacity:0;transition:opacity .5s;touch-action:pan-y}
+#stage{background:#f3eee9 url(../images/studio-hand.webp) 45% 62%/cover no-repeat}
+@media (max-width:759px){#stage{height:auto;aspect-ratio:1.16/1;min-height:0}#stage .stage-tip{top:10px;bottom:auto;font-size:13px;padding:7px 14px}}
+@media (min-width:760px){#stage{width:min(calc(100% - 40px),980px);height:auto;aspect-ratio:1280/900;max-height:none}}
+.studio-brush{position:absolute;left:0;top:0;z-index:2;pointer-events:none;opacity:0;transition:opacity .25s;filter:drop-shadow(0 8px 10px rgba(59,42,47,.35));will-change:transform}
+.studio-brush.on{opacity:1}
+.studio-brush .bb{fill:var(--bc,#e2457f)}
 .stage.ready .studio-canvas{opacity:1}
 .stage-loading{position:absolute;inset:0;display:flex;gap:10px;align-items:center;justify-content:center;transition:opacity .6s}
 .stage.ready .stage-loading{opacity:0;pointer-events:none}
