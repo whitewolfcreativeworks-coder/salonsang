@@ -297,6 +297,12 @@ export async function createNeon(door, canvas) {
 
   return {
     ready,
+    // where a box in sign-image pixels lands on screen right now (door-relative CSS px)
+    rectOf(x0, y0, x1, y1) {
+      const sx = x => (x - camera.left) / (camera.right - camera.left) * W;
+      const sy = y => (camera.top - (IMG_H - y)) / (camera.top - camera.bottom) * H;
+      return { left: sx(x0), top: sy(y0), width: sx(x1) - sx(x0), height: sy(y1) - sy(y0) };
+    },
     start() { if (t0 === Infinity) t0 = performance.now() + 150; },
     surge() { surge = 1.2; },
     dispose() { running = false; composer.dispose(); renderer.dispose(); }

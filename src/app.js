@@ -27,11 +27,36 @@ Promise.race([
   wait(5000)
 ]).then(() => {
   if (!html.classList.contains('loading')) { neon && neon.start(); return; }   // failsafe already fired
+  // always arrive at the very top of the site
+  window.scrollTo(0, 0);
+  if (window.__lenis) window.__lenis.scrollTo(0, { immediate: true, force: true });
+  // the drawn sign glides onto the exact spot of the real neon (same tube paths), then the
+  // splash dissolves and the neon ignites underneath it
+  // unlock the page first (a scrollbar may appear and the neon re-frames), then measure
+  html.classList.add('handoff');
   html.classList.remove('loading');
-  html.classList.add('revealing', 'revealed');
-  setTimeout(() => neon && neon.start(), reduceMotion ? 0 : 350);
-  setTimeout(() => { html.classList.remove('revealing'); $('.splash')?.remove(); }, 1000);
+  requestAnimationFrame(() => requestAnimationFrame(handoff));
 });
+
+function handoff() {
+  const sign = $('.splash-sign');
+  let glide = 0;
+  if (neon && sign && !reduceMotion) {
+    const door = $('.door').getBoundingClientRect();
+    const to = neon.rectOf(380, 200, 1230, 510);          // the splash SVG's viewBox in sign pixels
+    const from = sign.getBoundingClientRect();
+    const k = to.width / from.width;
+    sign.style.transformOrigin = '0 0';
+    sign.style.transition = 'transform .9s cubic-bezier(.65,0,.25,1)';
+    sign.style.transform = `translate(${door.left + to.left - from.left}px, ${door.top + to.top - from.top}px) scale(${k})`;
+    glide = 650;
+  }
+  setTimeout(() => {
+    html.classList.add('revealing', 'revealed');
+    setTimeout(() => neon && neon.start(), reduceMotion ? 0 : 450);   // ignite under the dissolving line
+    setTimeout(() => { html.classList.remove('revealing', 'handoff'); $('.splash')?.remove(); }, 1900);
+  }, glide);
+}
 
 // ---------- crystal chandelier (welcome section, loads as it nears view) ----------
 const chand = $('.chandelier');

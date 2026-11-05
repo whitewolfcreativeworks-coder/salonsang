@@ -67,6 +67,7 @@
     gsap.registerPlugin(ScrollTrigger);
     if (window.Lenis && !reduce) {
       lenis = new Lenis({ lerp: 0.09, wheelMultiplier: 0.9 });
+      window.__lenis = lenis;
       lenis.on('scroll', ScrollTrigger.update);
       gsap.ticker.add(t => lenis.raf(t * 1000));
       gsap.ticker.lagSmoothing(0);
