@@ -53,6 +53,7 @@
     document.body.classList.add('lit');
     window.sparkleBurst(e.clientX, e.clientY, 40);
     window.fluidBurst && window.fluidBurst(24);
+    window.neonSurge && window.neonSurge();
     setTimeout(() => lenis ? lenis.scrollTo('#welcome', { duration: 1.8 }) : $('#welcome').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }), 650);
   });
 
@@ -75,7 +76,7 @@
     }
     if (!reduce) {
       // the neon sign drifts back and the glow deepens as you leave the door
-      gsap.to('.door-neon', { scale: 1.12, yPercent: 8, ease: 'none', scrollTrigger: { trigger: '.door', start: 'top top', end: 'bottom top', scrub: true } });
+      gsap.to('.door-neon, .door-gl', { scale: 1.12, yPercent: 8, ease: 'none', scrollTrigger: { trigger: '.door', start: 'top top', end: 'bottom top', scrub: true } });
       gsap.to('.door-content', { yPercent: -30, opacity: 0, ease: 'none', scrollTrigger: { trigger: '.door', start: 'top top', end: '70% top', scrub: true } });
       gsap.from('.chandelier', { y: -120, opacity: 0, rotate: -6, duration: 1.6, ease: 'elastic.out(1, 0.45)', scrollTrigger: { trigger: '.welcome', start: 'top 85%' } });
       gsap.from('.logo', { scale: .85, opacity: 0, filter: 'blur(10px)', duration: 1.2, ease: 'power3.out', scrollTrigger: { trigger: '.welcome', start: 'top 80%' } });

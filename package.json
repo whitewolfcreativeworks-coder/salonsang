@@ -6,9 +6,10 @@
     "build": "rm -rf js/build && esbuild src/app.js --bundle --splitting --format=esm --minify --target=es2020 --outdir=js/build --legal-comments=linked"
   },
   "dependencies": {
-    "three": "0.187.0",
+    "@mediapipe/tasks-vision": "1.2.2",
     "@pmndrs/vanilla": "1.25.0",
-    "@mediapipe/tasks-vision": "1.2.2"
+    "postprocessing": "^6.39.6",
+    "three": "0.187.0"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

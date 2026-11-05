@@ -4,6 +4,16 @@ import { design, emit, onDesign, COLORS, RAINBOW, TONES, SHAPES, FINISHES, ARTS,
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
+// ---------- live neon sign (first thing on the page, so it starts right away) ----------
+const neonCanvas = $('#neonGL');
+if (neonCanvas) {
+  import('./neon.js').then(({ createNeon }) => createNeon($('.door'), neonCanvas)).then(neon => {
+    if (!neon) { neonCanvas.remove(); return; }
+    $('.door').classList.add('neon-live');
+    window.neonSurge = () => neon.surge();
+  }).catch(() => neonCanvas.remove());
+}
+
 const stage = $('#stage');
 const tipEl = $('#stageTip');
 const tip = t => { tipEl.textContent = t; tipEl.classList.remove('flash'); void tipEl.offsetWidth; tipEl.classList.add('flash'); };

@@ -55,7 +55,7 @@ let config = {
     BLOOM: true,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
-    BLOOM_INTENSITY: 0.55,
+    BLOOM_INTENSITY: 0.35,
     BLOOM_THRESHOLD: 0.5,
     BLOOM_SOFT_KNEE: 0.7,
     SUNRAYS: false,
@@ -1144,7 +1144,7 @@ function updateKeywords () {
 
 updateKeywords();
 initFramebuffers();
-multipleSplats(5);
+// (no startup splats: keeps the neon crisp until a visitor touches the glow)
 
 let lastUpdateTime = Date.now();
 let colorUpdateTimer = 0.0;

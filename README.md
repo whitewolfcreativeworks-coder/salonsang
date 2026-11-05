@@ -6,6 +6,7 @@ It's an "experience" site, not a booking site: every path ends with **call or te
 ## What's here
 - `index.html`: the page (neon + fluid entrance, suite tour, bring-your-friends, 3D nail studio, try-on, gallery, menu, home care, visit)
 - `src/`: source for the interactive studio (bundled into `js/build/` with esbuild)
+  - `neon.js`: live neon sign. Glass tubes traced from Sang's real sign (scikit-image skeleton → `images/neon-tubes.json`), gas-fill ignition and flicker, warm light spill on the wall (`images/neon-room.webp`, `neon-spill.png`), HDR mipmap bloom via pmndrs/postprocessing
   - `studio.js`: three.js 3D hand on white fur, brush painting, finishes and shaders, crystals, bloom
   - `tryon.js`: live camera try-on with MediaPipe Hand Landmarker
   - `app.js`, `state.js`: controls and the shared design ("Text this design to Sang")
@@ -17,7 +18,7 @@ It's an "experience" site, not a booking site: every path ends with **call or te
 `npm install` then `npm run build` (writes `js/build/`). The built files are committed so GitHub Pages can serve them directly.
 
 ## Open source used
-three.js (MIT) · @pmndrs/vanilla (MIT) · MediaPipe Tasks Vision (Apache 2.0) · WebGL Fluid Simulation by Pavel Dobryakov (MIT) · GSAP + ScrollTrigger (GSAP standard license, free) · Lenis (MIT) · Poly Haven HDRI (CC0) · Google Fonts (OFL)
+three.js (MIT) · pmndrs/postprocessing (zlib) · @pmndrs/vanilla (MIT) · scikit-image (BSD) and OpenCV (Apache 2.0), used offline for the neon trace · MediaPipe Tasks Vision (Apache 2.0) · WebGL Fluid Simulation by Pavel Dobryakov (MIT) · GSAP + ScrollTrigger (GSAP standard license, free) · Lenis (MIT) · Poly Haven HDRI (CC0) · Google Fonts (OFL)
 
 ## Common edits
 - **Prices:** search `index.html` for the menu section (`id="menu"`)
