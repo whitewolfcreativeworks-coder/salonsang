@@ -18,7 +18,7 @@ const VIEWS = [
 ];
 const PANEL_H = 4.6, PANEL_W = PANEL_H * 0.75, DIST = 4.0, RELIEF = 1.55;
 const HALF = Math.atan((PANEL_W / 2) / DIST);   // angular half-width of one panel
-const YAWS = [HALF, -HALF];                     // desk on the left, chair on the right: they meet in a corner
+const YAWS = [-HALF, HALF];                     // chair on the left, desk on the right (as in the real suite): they meet in a corner
 
 export function createSuite(container, hotspots) {
   let renderer;
@@ -56,16 +56,19 @@ export function createSuite(container, hotspots) {
     const geo = new THREE.PlaneGeometry(PANEL_W, PANEL_H, isPhone ? 180 : 260, isPhone ? 240 : 346);
     const mat = new THREE.ShaderMaterial({
       transparent: true,
-      uniforms: { uMap: { value: tex }, uDepth: { value: dtex }, uRelief: { value: RELIEF }, uSide: { value: i === 0 ? 1 : -1 }, uReveal: { value: 0 } },
+      uniforms: { uMap: { value: tex }, uDepth: { value: dtex }, uRelief: { value: RELIEF }, uSide: { value: Math.sign(YAWS[i]) }, uReveal: { value: 0 } },
       vertexShader: `
-        uniform sampler2D uDepth; uniform float uRelief; uniform float uReveal;
+        uniform sampler2D uDepth; uniform float uRelief; uniform float uReveal; uniform float uSide;
         varying vec2 vUv; varying float vD;
         void main(){
           vUv = uv;
           float d = texture2D(uDepth, uv).r;
           vD = d;
           vec3 p = position;
-          p.z += (d - 0.25) * uRelief * uReveal;
+          // ease the relief to flat at the corner seam so the two photos meet without a gap
+          float seam = uSide > 0.0 ? 1.0 - uv.x : uv.x;
+          float keep = smoothstep(0.0, 0.08, seam);
+          p.z += (d - 0.25) * uRelief * uReveal * keep;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
         }`,
       fragmentShader: `
@@ -137,10 +140,10 @@ export function createSuite(container, hotspots) {
   composer.addPass(new OutputPass());
 
   // ---------- touch & slide: like a 3D photo ----------
-  // `slide` runs from -1 (desk side) to +1 (chair side). Your finger drives it directly,
+  // `slide` runs from -1 (chair side, left) to +1 (desk side, right). Your finger drives it directly,
   // it keeps a little momentum when you let go, and phone tilt adds a gentle extra wobble.
-  let YAW_MAX = YAWS[0] * 1.15, YAW_MIN = -YAW_MAX; const PITCH = 0.16;
-  const look = { slide: -0.6, target: -0.6, vel: 0, pitch: 0, tp: 0, tilt: 0 };
+  let YAW_MAX = HALF * 1.15, YAW_MIN = -YAW_MAX; const PITCH = 0.16;
+  const look = { slide: 0.6, target: 0.6, vel: 0, pitch: 0, tp: 0, tilt: 0 };
   let drag = null, lastInput = performance.now(), idleT = 0, touched = false;
   container.addEventListener('pointerdown', e => {
     if (e.target.closest('.hs, .suite-views')) return;
@@ -175,7 +178,7 @@ export function createSuite(container, hotspots) {
     gyroBase += (e.gamma - gyroBase) * 0.01; // slowly re-centre so it never fights your finger
     look.tilt = clamp((e.gamma - gyroBase) / 25, -1, 1) * 0.22;
   });
-  function goTo(i) { look.target = i === 0 ? -0.75 : 0.75; look.vel = 0; lastInput = performance.now() + 4000; }
+  function goTo(i) { look.target = i === 0 ? 0.75 : -0.75; look.vel = 0; lastInput = performance.now() + 4000; }
 
   // ---------- 3D-anchored sparkle hotspots ----------
   const spots = hotspots.map(h => {
@@ -238,7 +241,7 @@ export function createSuite(container, hotspots) {
     composer.render(dt);
     placeSpots();
     // which view are we closer to?
-    container.dispatchEvent(new CustomEvent('suiteview', { detail: look.slide < 0 ? 0 : 1 }));
+    container.dispatchEvent(new CustomEvent('suiteview', { detail: look.slide < 0 ? 1 : 0 }));
     requestAnimationFrame(frame);
   }
   function resize() {
