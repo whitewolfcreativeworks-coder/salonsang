@@ -5,7 +5,6 @@
 // bounce sampled per color channel (dispersion, the rainbow "fire" of real lead crystal).
 // It sways gently on its chain, twists a little, and facets twinkle with star glints.
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 export function createChandelier(holder) {
   const probe = document.createElement('canvas');
@@ -27,14 +26,36 @@ export function createChandelier(holder) {
 
   const scene = new THREE.Scene();
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const env = pmrem.fromScene(new RoomEnvironment(), 0.02).texture;
+  // A bright cream "salon" for the crystals to see: soft walls, a few intense softboxes and pin lights
+  // (the sparkle), and dark accents (the crisp black cuts you see in real lead crystal).
+  const env = (() => {
+    const s = new THREE.Scene();
+    const flat = (c, k) => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(k), side: THREE.DoubleSide });
+    s.add(new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), flat('#fff0e6', 0.5)));
+    const panel = (w, h, x, y, z, c, k) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), flat(c, k)); m.position.set(x, y, z); m.lookAt(0, 0, 0); s.add(m); };
+    panel(2.4, 1.4, -3, 3, 4, '#ffffff', 16);      // key softbox, upper left front
+    panel(1.3, 1.3, 4, 2.4, 2.5, '#fff1dc', 11);   // warm window, right
+    panel(0.7, 3.2, 0.5, 4.9, -2, '#ffffff', 9);   // ceiling strip
+    panel(1.6, 0.7, 3, -1.2, -4, '#ffe4f1', 6);    // pink bounce behind
+    for (let i = 0; i < 14; i++) {                  // pin lights: tiny, very bright → pinpoint fire
+      const a = i * 2.39996, y = 4.6 * (1 - (i + 0.5) / 14 * 2) * 0.9, r = Math.sqrt(Math.max(0, 25 - y * y)) * 0.98;
+      panel(0.22, 0.22, Math.cos(a) * r, y, Math.sin(a) * r, i % 3 ? '#ffffff' : '#fff0d0', 18);
+    }
+    panel(10, 3.5, 0, -4.9, 0.5, '#2c2025', 0.25); // dark floor
+    panel(0.45, 9, -4.9, 0, 0.5, '#20171b', 0.2);  // dark door frame
+    panel(9, 0.35, 0.5, 0.8, -4.9, '#20171b', 0.2);
+    panel(0.35, 9, 4.9, 0, -1.5, '#2a1f24', 0.25);
+    const t = pmrem.fromScene(s, 0).texture;
+    s.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    return t;
+  })();
   pmrem.dispose();
 
   const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 50);
 
   // ---------------- materials ----------------
   const gold = new THREE.MeshPhysicalMaterial({
-    color: '#d9b877', metalness: 1, roughness: 0.24, envMap: env, envMapIntensity: 0.8,
+    color: '#e0bd78', metalness: 1, roughness: 0.2, envMap: env, envMapIntensity: 1.0,
     clearcoat: 0.35, clearcoatRoughness: 0.12
   });
   const goldDark = gold.clone(); goldDark.color.set('#bf9450'); goldDark.roughness = 0.3; goldDark.envMapIntensity = 0.7;
@@ -44,7 +65,8 @@ export function createChandelier(holder) {
   const crystalU = { uTime: { value: 0 } };
   const crystal = new THREE.MeshPhysicalMaterial({
     color: 0x000000, metalness: 0, roughness: 0.06, envMap: env, envMapIntensity: 1,
-    flatShading: true, specularIntensity: 1, specularColor: new THREE.Color('#ffffff')
+    flatShading: true, specularIntensity: 1, specularColor: new THREE.Color('#ffffff'),
+    transparent: true
   });
   crystal.onBeforeCompile = sh => {
     sh.uniforms.uTime = crystalU.uTime;
@@ -74,18 +96,26 @@ export function createChandelier(holder) {
           vec3 Nb = normalize(-N + 1.35 * (h3(floor(vFacet * 10.0)) - 0.5));
           vec3 col;
           for (int k = 0; k < 3; k++) {
-            float ior = 1.56 + 0.06 * float(k);            // R, G, B bend a little differently
+            float ior = 1.56 + 0.022 * float(k);            // R, G, B bend a little differently
             vec3 T = refract(I, N, 1.0 / ior);
             vec3 B = reflect(T, Nb);
             vec3 O = refract(B, -Nb, ior);
             if (dot(O, O) < 0.01) O = reflect(B, Nb);           // total internal reflection
-            col[k] = textureLod(envMap, envMapRotation * normalize(O), 0.0)[k];
+            col[k] = textureLod(envMap, envMapRotation * normalize(O), 1.2)[k];
           }
-          col *= vec3(0.97, 0.99, 1.04);
-          vec3 glass = mix(col, refl, F) * 1.75;
+          // keep the fire as soft pastel flecks rather than pure primaries
+          col = mix(vec3(dot(col, vec3(0.333))), col, 0.55) * vec3(0.96, 0.99, 1.05);
+          vec3 glass = mix(col, refl, F) * 1.6;
           // dark outline where the glass turns away, like real cut crystal on a light wall
-          glass *= mix(0.55, 1.0, smoothstep(0.08, 0.45, c));
-          outgoingLight = glass + outgoingLight * 1.4;
+          glass *= mix(0.3, 1.0, smoothstep(0.12, 0.6, c));
+          outgoingLight = glass + outgoingLight * 1.2;
+          // clear glass: where a facet just shows the cream room, let the real wall show through;
+          // dark cuts and bright fire stay solid
+          float lum = dot(outgoingLight, vec3(0.299, 0.587, 0.114));
+          float dark = 1.0 - smoothstep(0.18, 0.75, lum);
+          float fire = smoothstep(1.05, 2.2, lum);
+          diffuseColor.a = clamp(0.38 + dark * 0.62 + fire, 0.0, 1.0);
+          outgoingLight = mix(outgoingLight, outgoingLight * vec3(0.86, 0.9, 0.98), 0.5); // a cool silver body
         }
         #endif
         #include <opaque_fragment>`);
@@ -95,19 +125,19 @@ export function createChandelier(holder) {
   const faceted = g => { const n = g.index ? g.toNonIndexed() : g; n.computeVertexNormals(); return n; };
   const lathe = (pts, seg) => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg);
   // octagon bead (bicone)
-  const beadG = faceted(lathe([[0, -0.03], [0.03, 0], [0, 0.03]], 8));
+  const beadG = faceted(lathe([[0, -0.03], [0.022, -0.012], [0.03, 0], [0.022, 0.012], [0, 0.03]], 8));
   // small round bead
   const pearlG = faceted(new THREE.IcosahedronGeometry(0.024, 0));
   // pendalogue: flat teardrop prism, the classic chandelier drop
   const dropG = (() => {
-    const g = lathe([[0, 0], [0.035, -0.045], [0.06, -0.12], [0.052, -0.17], [0.026, -0.205], [0, -0.22]], 8);
+    const g = lathe([[0, 0], [0.02, -0.02], [0.038, -0.05], [0.055, -0.09], [0.06, -0.125], [0.054, -0.16], [0.04, -0.188], [0.022, -0.208], [0, -0.22]], 10);
     g.scale(1, 1, 0.55); return faceted(g);
   })();
   const dropSmallG = dropG.clone().scale(0.62, 0.62, 0.62);
   // faceted crystal ball
-  const ballG = faceted(new THREE.SphereGeometry(0.1, 12, 8));
+  const ballG = faceted(new THREE.IcosahedronGeometry(0.1, 1));
   // bottom spear
-  const spearG = faceted(lathe([[0, 0], [0.06, -0.08], [0.045, -0.16], [0, -0.3]], 8));
+  const spearG = faceted(lathe([[0, 0], [0.035, -0.03], [0.06, -0.08], [0.055, -0.12], [0.045, -0.16], [0.025, -0.23], [0, -0.3]], 10));
 
   const root = new THREE.Group();            // pivot = ceiling point (y = 0)
   scene.add(root);
@@ -266,7 +296,7 @@ export function createChandelier(holder) {
       gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.5, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
       g.fillStyle = gr; g.beginPath(); g.moveTo(-len, 0); g.lineTo(0, -w); g.lineTo(len, 0); g.lineTo(0, w); g.fill(); g.restore();
     };
-    ray(62, 3.2, 0); ray(62, 3.2, Math.PI / 2); ray(30, 1.8, Math.PI / 4); ray(30, 1.8, -Math.PI / 4);
+    ray(62, 2.2, 0); ray(62, 2.2, Math.PI / 2); ray(22, 1.2, Math.PI / 4); ray(22, 1.2, -Math.PI / 4);
     const gr = g.createRadialGradient(0, 0, 0, 0, 0, 22);
     gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,240,250,.6)'); gr.addColorStop(1, 'rgba(255,220,240,0)');
     g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 22, 0, 7); g.fill();
@@ -276,7 +306,7 @@ export function createChandelier(holder) {
     s.scale.setScalar(0.24); s.position.copy(b.position).y += 0.06; body.add(s); b.userData.halo = s;
   });
   const glintPool = [];
-  const glintTints = ['#ffffff', '#ffe39a', '#ffb3d6', '#a9d6ff', '#d4b8ff', '#fff6e0'];
+  const glintTints = ['#ffffff', '#fff6e0', '#ffffff', '#ffe9b0', '#ffffff', '#ffd6ea', '#ffffff', '#d6ecff', '#fff6e0'];
   for (let i = 0; i < 9; i++) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: starTex, transparent: true, depthWrite: false, depthTest: false, toneMapped: false, color: glintTints[i % glintTints.length] }));
     s.visible = false; s.userData = { t: 1, life: 0.7, size: 0.2 }; scene.add(s); glintPool.push(s);
@@ -289,9 +319,24 @@ export function createChandelier(holder) {
     tmpV.copy(p); body.localToWorld(tmpV);
     s.position.copy(tmpV);
     s.material.rotation = Math.random() * 0.6 - 0.3;
-    s.userData.t = 0; s.userData.life = 0.55 + Math.random() * 0.5; s.userData.size = (big ? 0.36 : 0.2) + Math.random() * 0.14;
+    s.userData.t = 0; s.userData.life = 0.55 + Math.random() * 0.5; s.userData.size = (big ? 0.24 : 0.11) + Math.random() * (big ? 0.1 : 0.07);
     s.visible = true;
   };
+
+  // ---------------- rainbow flecks on the wall (light split by the prisms) ----------------
+  const dotTex = spriteTex(g => {
+    const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.45, 'rgba(255,255,255,.5)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  });
+  const rainbow = ['#ff8fb8', '#ffc27a', '#fff07a', '#9df0a8', '#8fd0ff', '#c4a8ff'];
+  const flecks = [];
+  for (let i = 0; i < 16; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, transparent: true, depthWrite: false, toneMapped: false, color: rainbow[i % 6], opacity: 0 }));
+    const a = Math.random() * Math.PI * 2, r = 0.55 + Math.random() * 0.55;
+    s.userData = { a, r, y: HUB - 0.1 + (Math.random() - 0.4) * 0.9, ph: Math.random() * 6.28, sz: 0.035 + Math.random() * 0.045 };
+    s.renderOrder = -1; scene.add(s); flecks.push(s);
+  }
 
   // ---------------- layout ----------------
   // fit the real bounding box: canopy at the very top, a little room around for the sway
@@ -376,9 +421,17 @@ export function createChandelier(holder) {
       b.userData.halo.material.opacity = f; b.userData.halo.scale.setScalar(0.22 * f + 0.02);
     });
     warm.intensity = 2.0 + 0.15 * Math.sin(t * 6.1);
+    // rainbow flecks drift as the chandelier turns, like light thrown through the prisms
+    flecks.forEach(f => {
+      const u = f.userData, a = u.a + sw.tw * 2.2;
+      f.position.set(Math.cos(a) * u.r * 1.25, top + u.y + sw.z * 0.4, -0.9);
+      const tw = 0.5 + 0.5 * Math.sin(t * 0.9 + u.ph);
+      f.material.opacity = 0.16 + 0.24 * tw * Math.max(0, Math.cos(a * 0.5));
+      f.scale.setScalar(u.sz * (0.8 + 0.4 * tw));
+    });
     // star glints: a gentle few at a time
     glintTimer -= dt;
-    if (glintTimer <= 0) { spawnGlint(false); glintTimer = 0.22 + Math.random() * 0.45; }
+    if (glintTimer <= 0) { spawnGlint(Math.random() < 0.12); glintTimer = 0.18 + Math.random() * 0.4; }
     glintPool.forEach(s => {
       if (!s.visible) return;
       s.userData.t += dt / s.userData.life;
