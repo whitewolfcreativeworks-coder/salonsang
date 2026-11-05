@@ -4,6 +4,13 @@ import { design, emit, onDesign, COLORS, RAINBOW, TONES, SHAPES, FINISHES, ARTS,
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
+// ---------- online booking (shows once the backend is connected, or with ?demo) ----------
+import { configured, demoMode } from './config.js';
+if (configured() || demoMode()) {
+  document.documentElement.classList.add('can-book');
+  import('./booking.js').then(m => m.initBooking());
+}
+
 // ---------- first load: splash → live neon ----------
 // The splash (inline in index.html) stays up until the fonts are in and the neon has framed itself,
 // at least long enough for the sign to draw (~1.6 s) and never longer than 5 s. Then it fades,

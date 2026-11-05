@@ -3,15 +3,18 @@
   "private": true,
   "description": "salonsang.com: Salon Sang Nail Studio, Eugene OR",
   "scripts": {
-    "build": "rm -rf js/build && esbuild src/app.js --bundle --splitting --format=esm --minify --target=es2020 --outdir=js/build --legal-comments=linked"
+    "build": "rm -rf js/build && esbuild src/app.js src/portal.js --bundle --splitting --format=esm --minify --target=es2020 --outdir=js/build --legal-comments=linked",
+    "test:backend": "node backend/test.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.2.2",
     "@pmndrs/vanilla": "1.25.0",
+    "@supabase/supabase-js": "^2.119.0",
     "postprocessing": "^6.39.6",
     "three": "0.187.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
     "esbuild": "0.28.2"
   }
 }

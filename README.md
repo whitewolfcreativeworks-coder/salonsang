@@ -30,3 +30,9 @@ three.js (MIT) · pmndrs/postprocessing (zlib) · @pmndrs/vanilla (MIT) · sciki
 GitHub Pages from `main` / root. Custom domain `salonsang.com` (Namecheap DNS) to be connected.
 
 All photos and branding © Salon Sang. All rights reserved.
+
+## Appointments (online booking + Sang's portal)
+- `backend/salon-sang.sql`: the whole backend for a free Supabase project (tables, row-level security, booking + reminder logic, iPhone text outbox, ntfy alerts). Setup steps: `backend/SETUP.md`. Tests: `npm run test:backend` (runs the SQL in PGlite).
+- `src/booking.js`: the "Book online" sheet on the site (appears once `src/config.js` has the Supabase URL + key, or with `?demo`).
+- `portal/` + `src/portal.js` + `css/portal.css`: Sang's portal at /portal (Today, Calendar, Open times, Settings), installable on her iPhone home screen. `portal/setup.html` is her iPhone guide.
+- `src/backend.js`: one data layer with a live (Supabase) and a demo (in-browser, pretend data) mode.
