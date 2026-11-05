@@ -5,7 +5,7 @@
 import {
   WebGLRenderer, Scene, OrthographicCamera, Mesh, PlaneGeometry, ShaderMaterial, TextureLoader,
   SRGBColorSpace, LinearFilter, CatmullRomCurve3, Vector3, TubeGeometry, BufferAttribute, HalfFloatType,
-  Group, NoToneMapping
+  Group, NoToneMapping, SphereGeometry, CircleGeometry, Float32BufferAttribute
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, ToneMappingEffect, ToneMappingMode } from 'postprocessing';
@@ -70,11 +70,16 @@ export async function createNeon(door, canvas) {
   const roomMesh = new Mesh(new PlaneGeometry(IMG_W * 3, IMG_H * 3), roomMat);
   roomMesh.geometry.attributes.uv.array.forEach((v, i, a) => { a[i] = v * 3 - 1; });
   roomMesh.position.set(IMG_W / 2, IMG_H / 2, -10);
+  roomMesh.renderOrder = -1;
   scene.add(roomMesh);
 
   // ---------- glass tubes ----------
-  const radius = Math.max(3.1, data.r + 0.6);
-  const geos = [];
+  const radius = 5.0;                                   // ~12 mm glass at sign scale
+  const geos = [], caps = [], posts = [];
+  // free tube ends (where the electrodes sit) = polyline ends that no other polyline shares
+  // (an end is free if no other polyline passes within a few pixels of it)
+  const free = (q, own) => !data.lines.some(l => l !== own && l.p.some(r => (r[0] - q[0]) ** 2 + (r[1] - q[1]) ** 2 < 225));
+  const compLen = {};
   for (const line of data.lines) {
     const p = line.p;
     if (p.length < 2) continue;
@@ -84,9 +89,13 @@ export async function createNeon(door, canvas) {
     const segs = Math.max(4, Math.round(len / 2.5));
     const g = new TubeGeometry(new CatmullRomCurve3(pts, false, 'centripetal'), segs, radius, 8, false);
     const radial = 9, n = g.attributes.position.count;
-    const aT = new Float32Array(n), aC = new Float32Array(n);
+    const aT = new Float32Array(n), aC = new Float32Array(n), aE = new Float32Array(n);
+    const f0 = free(p[0], line), f1 = free(p[p.length - 1], line);
+    const electrode = len > 100;                         // only real tube ends get black-painted electrodes
     for (let i = 0; i <= segs; i++) {
       const d = (i / segs) * len;
+      const de = electrode ? Math.min(f0 ? d : 1e4, f1 ? len - d : 1e4) : 1e4;
+      for (let j = 0; j < radial; j++) aE[i * radial + j] = de;
       let k = 1; while (k < cum.length - 1 && cum[k] < d) k++;
       const f = (d - cum[k - 1]) / Math.max(1e-6, cum[k] - cum[k - 1]);
       const t = p[k - 1][2] + (p[k][2] - p[k - 1][2]) * Math.min(1, Math.max(0, f));
@@ -94,50 +103,105 @@ export async function createNeon(door, canvas) {
     }
     g.setAttribute('aT', new BufferAttribute(aT, 1));
     g.setAttribute('aC', new BufferAttribute(aC, 1));
+    g.setAttribute('aE', new BufferAttribute(aE, 1));
     geos.push(g);
+    // round glass caps on the free ends
+    [[f0, pts[0], p[0][2]], [f1, pts[pts.length - 1], p[p.length - 1][2]]].forEach(([isFree, at, t]) => {
+      if (!isFree) return;
+      const sg = new SphereGeometry(radius, 12, 8); sg.translate(at.x, at.y, 0);
+      const m = sg.attributes.position.count;
+      sg.setAttribute('aT', new Float32BufferAttribute(new Array(m).fill(t), 1));
+      sg.setAttribute('aC', new Float32BufferAttribute(new Array(m).fill(line.c), 1));
+      sg.setAttribute('aE', new Float32BufferAttribute(new Array(m).fill(electrode ? 0 : 1e4), 1));
+      sg.deleteAttribute('uv'); caps.push(sg);
+    });
+    // clear standoff clips every ~190 px along each tube
+    let acc = compLen[line.c] || 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dl = pts[i].distanceTo(pts[i - 1]);
+      const before = acc; acc += dl;
+      if (Math.floor(acc / 190) > Math.floor(before / 190) && i > 2 && i < pts.length - 3) posts.push(pts[i]);
+    }
+    compLen[line.c] = acc;
   }
-  const tubeGeo = mergeGeometries(geos);
-  geos.forEach(g => g.dispose());
+  geos.forEach(g => g.deleteAttribute('uv'));
+  const tubeGeo = mergeGeometries([...geos, ...caps]);
+  [...geos, ...caps].forEach(g => g.dispose());
 
   const tubeMat = new ShaderMaterial({
     uniforms: {
-      uOn: { value: [0, 0, 0] }, uSweep: { value: [0, 0, 0] }, uSurge: { value: 0 },
+      uOn: { value: [0, 0, 0] }, uSweep: { value: [0, 0, 0] }, uSurge: { value: 0 }, uLight: { value: 0 },
       uHalo: { value: WARM_HALO }, uCore: { value: WARM_CORE }
     },
     vertexShader: `
-      attribute float aT; attribute float aC;
-      varying float vT; varying float vC; varying vec3 vN;
+      attribute float aT; attribute float aC; attribute float aE;
+      varying float vT; varying float vC; varying float vE; varying vec3 vN;
       void main(){
-        vT = aT; vC = aC; vN = normalize(normalMatrix * normal);
+        vT = aT; vC = aC; vE = aE; vN = normalize(normalMatrix * normal);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }`,
     fragmentShader: `
-      uniform float uOn[3]; uniform float uSweep[3]; uniform float uSurge; uniform vec3 uHalo, uCore;
-      varying float vT; varying float vC; varying vec3 vN;
+      uniform float uOn[3]; uniform float uSweep[3]; uniform float uSurge; uniform float uLight; uniform vec3 uHalo, uCore;
+      varying float vT; varying float vC; varying float vE; varying vec3 vN;
       void main(){
         int c = int(vC + 0.5);
         float on = c == 0 ? uOn[0] : c == 1 ? uOn[1] : uOn[2];
         float sw = c == 0 ? uSweep[0] : c == 1 ? uSweep[1] : uSweep[2];
-        float facing = abs(normalize(vN).z);
+        vec3 N = normalize(vN);
+        float facing = clamp(N.z, 0.0, 1.0);
+        float rim = pow(1.0 - facing, 1.4);
+
         // gas fills the tube from one end: lit behind the front, a brighter bead at the front
         float filled = smoothstep(vT - 0.02, vT, sw);
         float front = exp(-abs(vT - sw) * 45.0) * step(sw, 0.999);
-        float e = on * (filled + front * 1.6) * (1.0 + uSurge);
-        float core = pow(facing, 7.0);
-        vec3 lit = mix(uHalo * 3.4, uCore * 4.2, core) * e;
-        // unlit glass: a faint tinted tube catching the room light
-        vec3 glass = vec3(0.10, 0.07, 0.075) * (0.35 + 0.65 * pow(1.0 - facing, 2.0)) + vec3(0.25, 0.22, 0.2) * pow(facing, 30.0) * 0.4;
-        gl_FragColor = vec4(glass * (1.0 - min(e, 1.0)) + lit, 1.0);
-      }`,
-    depthWrite: false, depthTest: false
+        float block = 1.0 - smoothstep(8.0, 13.0, vE);          // black-painted electrode ends
+        float e = on * (filled + front * 1.6) * (1.0 + uSurge) * (1.0 - block);
+
+        // the glowing gas column sits in the middle of the tube...
+        float column = smoothstep(0.3, 0.9, facing);
+        vec3 gas = mix(uHalo * 1.1, mix(uHalo * 3.0, uCore * 4.6, pow(facing, 9.0)), column);
+        // ...seen through the glass wall, which gets deeper and more saturated toward the edges
+        vec3 lit = gas * e * (1.0 - rim * 0.72) + uHalo * vec3(0.9, 0.55, 0.5) * rim * e * 0.28;
+
+        // glass: a crisp highlight streak from above, a softer warm one from the glow below, and a fresnel edge
+        vec3 V = vec3(0.0, 0.0, 1.0);
+        vec3 H1 = normalize(normalize(vec3(-0.25, 0.92, 0.5)) + V);
+        vec3 H2 = normalize(normalize(vec3(0.2, -0.9, 0.45)) + V);
+        float s1 = pow(max(dot(N, H1), 0.0), 70.0);
+        float s2 = pow(max(dot(N, H2), 0.0), 45.0);
+        float fr = pow(1.0 - facing, 5.0);
+        vec3 glassHi = vec3(1.0, 0.96, 0.92) * s1 * (1.5 + 0.7 * e) + uCore * s2 * (0.12 + 0.3 * uLight) + vec3(0.5, 0.26, 0.16) * fr * (0.25 + uLight);
+
+        vec3 clearGlass = vec3(0.035, 0.028, 0.03) + vec3(0.09, 0.07, 0.07) * rim;
+        vec3 body = mix(clearGlass, vec3(0.008, 0.006, 0.008), block);
+        gl_FragColor = vec4(body * (1.0 - min(e, 1.0)) + lit + glassHi, 1.0);
+      }`
   });
+  // clear acrylic standoffs behind the tube: a little ring of light where the glow catches their edge
+  const postMat = new ShaderMaterial({
+    uniforms: { uLight: { value: 0 }, uHalo: { value: WARM_HALO } },
+    vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+    fragmentShader: `
+      uniform float uLight; uniform vec3 uHalo; varying vec2 vP;
+      void main(){
+        float r = length(vP) / 9.0;
+        float ring = smoothstep(0.72, 0.9, r) * (1.0 - smoothstep(0.9, 1.0, r));
+        float body = 1.0 - smoothstep(0.9, 1.0, r);
+        vec3 col = vec3(0.02, 0.015, 0.016) * body + (uHalo * 0.9 + 0.15) * ring * (0.25 + uLight * 0.9);
+        gl_FragColor = vec4(col, body);
+      }`,
+    transparent: true, depthWrite: false
+  });
+  const postGeos = posts.map(at => { const cg = new CircleGeometry(9, 24); cg.translate(at.x + 1.5, at.y - 1.5, -radius - 1); return cg; });
+  const postMesh = postGeos.length ? new Mesh(mergeGeometries(postGeos), postMat) : null;
+  postGeos.forEach(g => g.dispose());
   const tubes = new Mesh(tubeGeo, tubeMat);
-  const sign = new Group(); sign.add(tubes); scene.add(sign);
+  const sign = new Group(); sign.add(tubes); if (postMesh) sign.add(postMesh); scene.add(sign);
 
   // ---------- post: HDR bloom + filmic tone mapping ----------
-  const composer = new EffectComposer(renderer, { frameBufferType: HalfFloatType, multisampling: mobile ? 0 : 4 });
+  const composer = new EffectComposer(renderer, { frameBufferType: HalfFloatType, multisampling: mobile ? 2 : 4 });
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new BloomEffect({ mipmapBlur: true, luminanceThreshold: 0.85, luminanceSmoothing: 0.25, intensity: 2.3, radius: 0.8, levels: 8 });
+  const bloom = new BloomEffect({ mipmapBlur: true, luminanceThreshold: 1.1, luminanceSmoothing: 0.3, intensity: 1.7, radius: 0.82, levels: 8 });
   composer.addPass(new EffectPass(camera, bloom, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })));
 
   // ---------- framing ----------
@@ -147,18 +211,14 @@ export async function createNeon(door, canvas) {
     const dpr = Math.min(devicePixelRatio || 1, mobile ? 1.75 : 2);
     renderer.setPixelRatio(dpr);
     composer.setSize(W, H, false);
-    const a = W / H;
-    let vw, vh, top, cx;
-    if (a >= 1) {
-      if (a > IMG_W / IMG_H) { vw = IMG_W; vh = vw / a; } else { vh = IMG_H; vw = vh * a; }
-      vw = Math.max(vw, SIGN.w / 0.56); vh = vw / a;
-      cx = SIGN.cx - 20;
-      top = SIGN.cy - vh * 0.3;
-    } else {
-      vw = SIGN.w / 0.9; vh = vw / a;
-      cx = SIGN.cx;
-      top = SIGN.cy - vh * 0.27;
-    }
+    // fit the sign into the space above the text, never wider than ~90% (phones) / 56% (desktops)
+    const content = door.querySelector('.door-content');
+    const free = Math.max(H * 0.3, (content ? content.offsetTop : H * 0.55) - 8);
+    const SIGN_H = 310;                                   // tubes + underline + glow room, image px
+    const maxW = W >= H ? 0.56 : 0.9;
+    const k = Math.min((W * maxW) / SIGN.w, free / SIGN_H);   // screen px per image px
+    const vw = W / k, vh = H / k, cx = SIGN.cx;
+    const top = SIGN.cy - (free * 0.5 + (W >= H ? H * 0.02 : 0)) / k;
     camera.left = cx - vw / 2; camera.right = cx + vw / 2;
     camera.top = IMG_H - top; camera.bottom = IMG_H - top - vh;
     camera.updateProjectionMatrix();
@@ -196,6 +256,7 @@ export async function createNeon(door, canvas) {
     tubeMat.uniforms.uSurge.value = surge;
     const light = (on[0] * sweep[0] * 0.45 + on[1] * sweep[1] * 0.4 + on[2] * sweep[2] * 0.15) * (1 + surge * 0.6);
     roomMat.uniforms.uLight.value = light;
+    tubeMat.uniforms.uLight.value = light; postMat.uniforms.uLight.value = light;
     // a hint of depth: tubes stand off the wall, so they drift a touch against it
     sign.position.x += (look.x * 7 - sign.position.x) * 0.06;
     sign.position.y += (-look.y * 5 - sign.position.y) * 0.06;
