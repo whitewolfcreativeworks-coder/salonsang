@@ -28,6 +28,7 @@ uniform int uFinish, uArt, uShape;
 uniform vec3 uToneMul;
 uniform vec2 uC[${N}], uAx[${N}];
 uniform float uBase[${N}], uTip[${N}], uHw[${N}], uLum[${N}], uHi[${N}];
+uniform float uVs[${N}], uC0[${N}], uH0[${N}];   // stress point (v), centre-line offset and half-width there (hw units)
 uniform vec4 uCol[${N}], uPrev[${N}];      // rgb + a (a=0 → bare nail)
 uniform float uProg[${N}], uManual[${N}], uAccent[${N}], uPulse[${N}];
 
@@ -47,19 +48,45 @@ float sdHeart(vec2 p){ p.x = abs(p.x);
   return sqrt(min(dot(p - vec2(0.0,1.0), p - vec2(0.0,1.0)), dot(p - 0.5*max(p.x+p.y,0.0), p - 0.5*max(p.x+p.y,0.0)))) * sign(p.x - p.y); }
 float fill(float d, float aa){ return 1.0 - smoothstep(-aa, aa, d); }
 
-// half-width profile of the free edge for each shape; x: 0 at mid-nail → 1 at the new tip
-float profile(int s, float x){
-  x = clamp(x, 0.0, 1.0);
-  if (s == 0) return x < 0.82 ? 1.0 : 0.72 + 0.28 * sqrt(max(0.0, 1.0 - pow((x - 0.82) / 0.18, 2.0)));   // square, soft corners
-  if (s == 1) return sqrt(max(0.0, 1.0 - pow(max(0.0, x - 0.35) / 0.65, 2.0)));                          // round
-  if (s == 2) return pow(max(0.0, 1.0 - x * x), 0.75);                                                     // almond
-  if (s == 3) return mix(1.0, 0.56, x);                                                   // coffin
-  return pow(max(0.0, 1.0 - x), 1.15);                                                                     // stiletto
+float smax(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0); return mix(b, a, h) + k * h * (1.0 - h); }
+float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+// nail length (cuticle → new tip, in real-nail lengths) for each shape
+float tipLen(int s){ return s == 0 ? 1.2 : s == 1 ? 1.22 : s == 2 ? 1.42 : s == 3 ? 1.45 : 1.55; }
+// tangent ogive (the classic stiletto curve): sides leave the sidewalls parallel, bow gently outward, meet in
+// one centred point. half-width H at Y=0, point at Y=L. Signed distance (approx.), + outside.
+float sdOgive(vec2 q, float H, float L){
+  float rho = (H * H + L * L) / (2.0 * H);
+  float Y = clamp(q.y, 0.0, L);
+  float w = sqrt(max(rho * rho - Y * Y, 0.0)) + H - rho;
+  float dw = -Y / sqrt(max(rho * rho - Y * Y, 1e-4));
+  float d = (abs(q.x) - w) / sqrt(1.0 + dw * dw);
+  if (q.y > L) d = length(vec2(q.x, q.y - L));
+  return d;
 }
-float tipLen(int s){ return s == 0 ? 1.06 : s == 1 ? 1.04 : s == 2 ? 1.14 : s == 3 ? 1.2 : 1.36; }
-// where each shape starts to differ from the real (almond-ish) nail, and the real nail's half-width there
-float shapeStart(int s){ return s == 0 || s == 3 ? 0.5 : s == 1 ? 0.62 : 0.78; }
-float natW(float v){ return sqrt(max(0.0, 1.0 - pow(max(0.0, v - 0.45) / 0.6, 2.0))); }
+// the extension beyond the stress point, in a symmetric frame: q.x across from the centre line, q.y along
+// from the stress point (both in half-widths); H = half-width at the stress point, L = length to the tip
+float sdTip(int s, vec2 q, float H, float L){
+  if (s == 0) {                                          // square: straight walls, softly rounded corners
+    float r = 0.22 * H; vec2 d = vec2(abs(q.x) - (H - r), q.y - (L - r));
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+  }
+  if (s == 1) {                                          // round: straight walls into an even half-oval
+    float Rt = 0.95 * H, y0 = L - Rt;
+    if (q.y < y0) return abs(q.x) - H;
+    vec2 e = vec2(q.x / H, (q.y - y0) / Rt); float k = length(e);
+    return (k - 1.0) * min(H, Rt) * (k > 0.0 ? 1.0 : 1.0);
+  }
+  if (s == 2) {                                          // almond: an ogive with a soft, rounded peak
+    float rr = 0.32 * H;
+    return sdOgive(q, H - rr, L - rr) - rr;
+  }
+  if (s == 3) {                                          // coffin / ballerina: straight tapered walls, flat tip
+    float Ht = 0.56 * H, sl = (H - Ht) / L;
+    float side = (abs(q.x) - (H - sl * clamp(q.y, 0.0, L))) / sqrt(1.0 + sl * sl);
+    return smax(side, q.y - L, 0.05 * H);
+  }
+  return sdOgive(q, H, L) - 0.02 * H;                    // stiletto: long, slim, sharp, centred
+}
 
 const int PN = 48;
 vec2 prof(int i, float v){                 // real nail's left/right half-width (in hw units) at v; negative = outside
@@ -68,18 +95,7 @@ vec2 prof(int i, float v){                 // real nail's left/right half-width 
   int k = int(floor(x)); float f = x - float(k);
   return mix(texelFetch(uProf, ivec2(k, i), 0).rg, texelFetch(uProf, ivec2(min(k + 1, PN - 1), i), 0).rg, f);
 }
-float smax(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0); return mix(b, a, h) + k * h * (1.0 - h); }
-float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
 float realW(int i, float v, float side){ vec2 p = prof(i, v); return side < 0.0 ? p.x : p.y; }
-// painted half-width: the real nail, smoothly grown into the chosen shape (no corners where they meet)
-float paintW(int i, float v, float side){
-  float wr = realW(i, v, side);
-  float s0 = shapeStart(uShape), Lx = tipLen(uShape);
-  float w0 = realW(i, s0, side);
-  float x = (v - s0) / (Lx - s0);
-  float ws = v < s0 ? w0 : (x <= 1.0 ? w0 * profile(uShape, x) : -0.3);
-  return mix(wr, smax(wr, ws, 0.1), smoothstep(s0 - 0.12, s0 + 0.08, v));
-}
 // studio lighting reflected in the clear coat: a dim room, bright ceiling, a tall softbox up-left and a small
 // lamp on the right (both drift with your finger / the phone's tilt)
 float sdRound(vec2 p, vec2 b, float r){ vec2 d = abs(p) - b + r; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r; }
@@ -149,11 +165,11 @@ float sdAt(int i, vec2 pp){
   float u = dot(d, pr), hw = uHw[i], len = uTip[i] - uBase[i], kk = hw / len;
   float v = (dot(d, ax) - uBase[i]) / len, ux = abs(u) / hw;
   float sdR = -(texture(uMask, vec2(pp.x, pp.y * uPhotoPx.x / uPhotoPx.y)).r * 255.0 - 128.0) / 8.0 / (hw * uPhotoPx.x);
-  float s0 = shapeStart(uShape), Lx = tipLen(uShape);
-  float w0 = max(realW(i, s0, u < 0.0 ? -1.0 : 1.0), 0.3), xs = clamp((v - s0) / (Lx - s0), 0.0, 1.0);
-  float Ws = w0 * profile(uShape, xs), dWs = (w0 * profile(uShape, min(xs + 0.02, 1.0)) - Ws) / (0.02 * (Lx - s0)) * kk;
-  float sdS = v < s0 ? ux - min(w0, realW(i, v, u < 0.0 ? -1.0 : 1.0)) : (ux - Ws) / sqrt(1.0 + dWs * dWs);
-  sdS = max(sdS, (v - Lx) / kk);                     // the free edge (flat for square / coffin)
+  // the chosen shape grows from the stress point (where the nail is widest), centred on the nail
+  float vs = uVs[i], H = uH0[i], Lh = (tipLen(uShape) - vs) / kk;
+  vec2 q = vec2(u / hw - uC0[i], (v - vs) / kk);
+  float sdS = q.y < 0.0 ? max(ux - min(H + (u < 0.0 ? -uC0[i] : uC0[i]), realW(i, v, u < 0.0 ? -1.0 : 1.0)), -q.y - 2.5)
+                        : sdTip(uShape, q, H, Lh);
   return smin(sdR, sdS, 0.12);
 }
 
@@ -214,16 +230,14 @@ void main(){
     float t = dot(d, ax), u = dot(d, pr);
     float len = uTip[i] - uBase[i], hw = uHw[i];
     float v = (t - uBase[i]) / len;                      // 0 cuticle → 1 real tip
-    if (v < -0.1 || v > 1.6 || abs(u) > hw * 1.8) continue;
+    if (v < -0.08 || v > tipLen(uShape) + 0.06 || abs(u) > hw * 1.5) continue;
     vec4 newC = uCol[i], oldC = uPrev[i];
     if (newC.a < 0.5 && oldC.a < 0.5 && uPulse[i] <= 0.0) continue;   // bare nail: leave the photo untouched
     float side = u < 0.0 ? -1.0 : 1.0, ux = abs(u) / hw;
     float px = aa / hw;                                   // one screen pixel, in half-widths
     float kk = hw / len;
-    float W = paintW(i, v, side);
     float sd = sdAt(i, p);
     float sdR = -(mk.r * 255.0 - 128.0) / 8.0 / (hw * uPhotoPx.x);
-    float s0 = shapeStart(uShape), Lx = tipLen(uShape), w0 = max(realW(i, s0, side), 0.3);
     float shapeCov = 1.0 - smoothstep(-px * 0.7, px * 0.7, sd);
     if (newC.a > 0.5 || oldC.a > 0.5) {                  // skin right around the polish follows the chosen tone too
       vec3 ps = toSrgb(photo); float sat = max(ps.r, max(ps.g, ps.b)) - min(ps.r, min(ps.g, ps.b));
@@ -232,10 +246,8 @@ void main(){
     }
     // soft shadow of a longer free edge onto whatever is underneath
     float inReal = 1.0 - smoothstep(-px, px, sdR);
-    if (inReal < 0.5 && v > 0.85 && sd > 0.0 && (newC.a > 0.5 || oldC.a > 0.5)) {
-      float u2 = u + hw * 0.07, v2 = v - 0.035;
-      float x2 = (v2 - s0) / (Lx - s0);
-      float s2 = x2 < 0.0 || x2 > 1.0 ? 9.0 : abs(u2) / hw - w0 * profile(uShape, x2);
+    if (inReal < 0.5 && v > 0.85 && sd > 0.0 && sd < 0.5 && (newC.a > 0.5 || oldC.a > 0.5)) {
+      float s2 = sdAt(i, p + pr * (0.07 * hw) - ax * (0.035 * len));
       shadowAcc = max(shadowAcc, 0.28 * (1.0 - smoothstep(0.0, 0.3, s2)));
     }
     if (shapeCov <= 0.001) continue;
@@ -253,7 +265,8 @@ void main(){
     if (newC.a < 0.5) fresh = 0.0;
 
     // the surface: a gel C-curve across, a gentle slope down to the free edge, rounded edges all round
-    float sx = clamp(ux / max(W, 0.05), 0.0, 1.0) * side;          // -1 .. 1 across the nail
+    float xc = u / hw - uC0[i];
+    float sx = clamp(xc / max(abs(xc) - sd, 0.05), -1.0, 1.0);    // -1 .. 1 across the nail
     float dhx = -0.5 * sx * pow(max(1.0 - sx * sx, 0.02), -0.35);
     float dhy = -0.28 * (v - 0.35);
     vec2 n2 = vec2(-dhx, -dhy);
@@ -327,6 +340,12 @@ export function createStudio(container, { onReady, onTip } = {}) {
   gl.uniform2fv(u('uC'), NAILS.flatMap(n => n.c)); gl.uniform2fv(u('uAx'), NAILS.flatMap(n => n.ax));
   gl.uniform1fv(u('uBase'), NAILS.map(n => n.base)); gl.uniform1fv(u('uTip'), NAILS.map(n => n.tip));
   gl.uniform1fv(u('uHw'), NAILS.map(n => n.hw)); gl.uniform1fv(u('uLum'), NAILS.map(n => n.lum)); gl.uniform1fv(u('uHi'), NAILS.map(n => n.hi));
+  // stress point per nail: where the traced outline is widest (between 30% and 85% of its length)
+  { const vs = [], c0 = [], h0 = [];
+    NAILS.forEach(n => { const PNn = n.wl.length; let best = -1, bk = 0;
+      for (let k = 0; k < PNn; k++) { const v = -0.05 + 1.1 * k / (PNn - 1); if (v < 0.3 || v > 0.85) continue; const w = n.wl[k] + n.wr[k]; if (w > best) { best = w; bk = k; } }
+      vs.push(-0.05 + 1.1 * bk / (PNn - 1)); c0.push((n.wr[bk] - n.wl[bk]) / 2); h0.push((n.wl[bk] + n.wr[bk]) / 2); });
+    gl.uniform1fv(u('uVs'), vs); gl.uniform1fv(u('uC0'), c0); gl.uniform1fv(u('uH0'), h0); }
   gl.uniform1fv(u('uAccent'), NAILS.map(n => n.slot === ACCENT_SLOT ? 1 : 0));
   gl.uniform2f(u('uPhotoPx'), PHOTO.w, PHOTO.h);
   // nail outlines: 48 × N texels of (left, right) half-widths
@@ -364,7 +383,7 @@ export function createStudio(container, { onReady, onTip } = {}) {
     }
     return true;
   }
-  const tipLen = () => [1.06, 1.04, 1.14, 1.2, 1.36][SHAPE[design.shape] ?? 2];
+  const tipLen = () => [1.2, 1.22, 1.42, 1.45, 1.55][SHAPE[design.shape] ?? 2];
 
   // ---------- view: fit all eight nails, fill the stage ----------
   let W = 1, H = 1, dpr = 1, scale = 1, off = [0, 0];
