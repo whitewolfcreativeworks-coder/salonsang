@@ -133,9 +133,9 @@ vec3 finish(vec3 base, float shade, float Ln, float spec, float glint, vec2 q, f
   } else {                                              // classic gloss
     pc = base * shade;
   }
-  pc = mix(pc, vec3(1.0), clamp(spec * 0.85, 0.0, 1.0)) + vec3(glint * 0.45);
-  pc *= mix(0.8, 1.0, 1.0 - smoothstep(0.65, 1.05, ax01));   // richer at the side walls
-  pc *= mix(0.82, 1.0, smoothstep(0.0, 0.05, v));            // tiny cuticle line
+  pc = mix(pc, vec3(1.0), clamp(spec, 0.0, 1.0)) + vec3(glint * 0.45);
+  pc *= mix(0.88, 1.0, 1.0 - smoothstep(0.7, 1.05, ax01));  // a touch richer at the side walls
+  pc *= mix(0.9, 1.0, smoothstep(0.02, 0.08, v));             // soft cuticle edge
   return pc;
 }
 
@@ -145,7 +145,13 @@ void main(){
   vec2 uv = q / uPhotoPx;
   vec3 photo = toLin(texture(uPhoto, uv).rgb);
   vec4 mk = texture(uMask, uv);
-  float skin = mk.b, realA = mk.g; int rid = int(floor(mk.r * 255.0 / 30.0 + 0.5));
+  ivec2 tx = clamp(ivec2(uv * uPhotoPx), ivec2(0), ivec2(uPhotoPx) - 1);
+  vec4 mkx = texelFetch(uMask, tx, 0);
+  float skin = mk.b, realA = mk.g; int rid = int(floor(mkx.r * 255.0 / 30.0 + 0.5));
+  if (rid == 0 && realA > 0.02) {            // edge pixel: borrow the id of a neighbour inside the nail
+    for (int k = 0; k < 4; k++) { ivec2 o = k == 0 ? ivec2(1,0) : k == 1 ? ivec2(-1,0) : k == 2 ? ivec2(0,1) : ivec2(0,-1);
+      int r2 = int(floor(texelFetch(uMask, clamp(tx + o, ivec2(0), ivec2(uPhotoPx) - 1), 0).r * 255.0 / 30.0 + 0.5)); if (r2 > 0) { rid = r2; break; } }
+  }
   // skin tone
   vec3 col = mix(photo, photo * uToneMul, skin);
   float L = dot(texture(uPhoto, uv).rgb, vec3(0.299, 0.587, 0.114));
@@ -177,6 +183,7 @@ void main(){
       shadowAcc = max(shadowAcc, 0.3 * (1.0 - smoothstep(0.0, hw * 0.35, abs(sp.x) - ws)) * (1.0 - smoothstep(Lx - 0.02, Lx + 0.08, sp.y)) * step(0.6, sp.y));
     }
     if (max(real, ext) <= 0.001) continue;
+    if (uCol[i].a < 0.5 && uPrev[i].a < 0.5 && uPulse[i] <= 0.0) continue;   // bare nail: leave the photo untouched
     bool onReal = rid == i + 1 && realA > 0.5;
     vec2 a = vec2(u / max(w, hw * 0.25), v);           // nail-local, x normalized to the current width
     float ax01 = clamp(abs(u) / hw, 0.0, 1.0);
@@ -192,24 +199,33 @@ void main(){
     }
     if (uManual[i] > 0.5) fresh = max(fresh, texture(uPaint, uv).r);
     if (newC.a < 0.5) fresh = 0.0;
-    cover = max(real, ext * (oldC.a > 0.5 ? 1.0 : fresh));
+    float painted = max(fresh, oldC.a > 0.5 ? 1.0 : 0.0);
+    float realP = smoothstep(0.3, 0.75, real) * smoothstep(0.012, 0.05, v);   // polish sits just inside the nail, clean cuticle line
+    cover = max(mix(real, realP, painted), ext * painted);
     if (cover <= 0.001) continue;
     // light for the longer free edge: borrow it from just inside the real nail's tip, at the same relative spot
-    float Lsrc = L; bool synth = !onReal;
+    float Lsrc = mk.a * 2.0; bool synth = !onReal;
     if (synth) {
       float vc = min(v, 0.86), uc = u / max(w, 1e-4) * hw * natW(vc) * 0.92;
       vec2 pp = vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x) + ax * (uBase[i] + vc * len) + pr * uc;
       vec2 uv2 = vec2(pp.x, pp.y * uPhotoPx.x / uPhotoPx.y);
-      Lsrc = dot(texture(uPhoto, uv2).rgb, vec3(0.299, 0.587, 0.114));
+      Lsrc = texture(uMask, uv2).a * 2.0;
     }
     // light: borrow the photo's real light on the real nail, synthesize it on longer free edges
-    float Ln = Lsrc / uLum[i];
-    float shade = clamp(mix(1.0, Ln, 0.6), 0.55, 1.3) * (synth ? 1.0 - 0.08 * smoothstep(0.95, Lx, v) : 1.0);
-    float spec = smoothstep(uHi[i], min(uHi[i] + 0.12, 0.995), Lsrc) * (synth ? 0.85 : 1.0);
-    float gpos = -0.35 + uLight.x * 0.5;                 // a glint that follows your finger / phone tilt
-    float glint = exp(-pow((u / hw - gpos) / 0.13, 2.0)) * smoothstep(0.08, 0.3, v) * smoothstep(Lx, Lx - 0.35, v);
-    vec3 bareCol = onReal ? col : toLin(vec3(0.94, 0.86, 0.83)) * shade + spec * 0.0;
-    vec3 under = onReal ? photo : toLin(vec3(0.95, 0.88, 0.86));
+    float Ln = clamp(Lsrc, 0.6, 1.4);
+    float un = u / hw;
+    // smooth, glassy gel: the real nail's broad light × a clean dome, no wavy streaks
+    float dome = 0.9 + 0.1 * cos(clamp(un, -1.2, 1.2) * 1.3);
+    float shade = clamp(mix(1.0, Ln, 0.75), 0.7, 1.2) * dome * (synth ? 1.0 - 0.06 * smoothstep(0.95, Lx, v) : 1.0);
+    // one long gel highlight that curves with the nail and slides with your finger / phone tilt, plus a soft tip glow
+    float hp = -0.42 + uLight.x * 0.22 + 0.10 * (v - 0.5) * (v - 0.5);
+    float hwid = 0.075 + 0.03 * smoothstep(0.2, 0.8, v);
+    float along = smoothstep(0.1, 0.24, v) * (1.0 - smoothstep(Lx - 0.32, Lx - 0.12, v));
+    float spec = (1.0 - smoothstep(hwid * 0.55, hwid, abs(un - hp))) * along * 0.78;
+    spec += exp(-pow((un + 0.1 - uLight.x * 0.1) / 0.32, 2.0) - pow((v - Lx * 0.82) / 0.1, 2.0)) * 0.16;
+    float glint = exp(-pow((un - 0.38 - uLight.x * 0.15) / 0.06, 2.0)) * smoothstep(0.35, 0.55, v) * (1.0 - smoothstep(0.7, 0.9, v)) * 0.35;
+    vec3 bareCol = real > 0.001 ? col : toLin(vec3(0.94, 0.86, 0.83)) * shade;
+    vec3 under = toLin(vec3(0.93, 0.83, 0.79)) * shade;      // a clean natural nail under sheer jelly
     vec3 oldCol = bareCol;
     if (oldC.a > 0.5) oldCol = finish(toLin(oldC.rgb), shade, Ln, spec, glint, q, u / hw, v, ax01, under, i);
     vec3 nailCol = oldCol;
@@ -248,7 +264,7 @@ export function createStudio(container, { onReady, onTip } = {}) {
   const tex = (unit, filter) => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
-  const tPhoto = tex(0, gl.LINEAR), tMask = tex(1, gl.NEAREST), tPaint = tex(2, gl.LINEAR);
+  const tPhoto = tex(0, gl.LINEAR), tMask = tex(1, gl.LINEAR), tPaint = tex(2, gl.LINEAR);
   gl.uniform1i(u('uPhoto'), 0); gl.uniform1i(u('uMask'), 1); gl.uniform1i(u('uPaint'), 2);
   // manual brush canvas (half resolution is plenty)
   const paint = document.createElement('canvas'); paint.width = PHOTO.w / 2; paint.height = PHOTO.h / 2;

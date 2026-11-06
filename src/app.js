@@ -1,5 +1,5 @@
 // Wires the studio controls, the 3D studio and the camera try-on together.
-import { design, emit, onDesign, COLORS, RAINBOW, TONES, SHAPES, FINISHES, ARTS, smsHref } from './state.js';
+import { design, emit, onDesign, COLORS, RAINBOW, TONE_STOPS, TONE_DEFAULT, toneAt, SHAPES, FINISHES, ARTS, smsHref } from './state.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -118,13 +118,36 @@ const wall = $('#polishWall');
 wall.innerHTML = COLORS.map(([n, h], k) => `<button type="button" class="bottle${k === 0 ? ' on' : ''}" style="--c:${h}" data-k="${k}" aria-label="${n}"><i class="b-cap"></i><i class="b-neck"></i><i class="b-glass"><i class="b-shine"></i></i></button>`).join('');
 $('#colorName').textContent = design.color[0];
 
-const tones = $('#tones');
-tones.innerHTML = TONES.map((t, k) => `<button type="button" style="--t:${t}" data-k="${k}" class="${t === design.tone ? 'on' : ''}" aria-label="Skin tone ${k + 1}"></button>`).join('');
-tones.addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  $$('button', tones).forEach(x => x.classList.toggle('on', x === b));
-  design.tone = TONES[+b.dataset.k]; emit('tone');
-});
+// ---------- ghost controls inside the picture ----------
+const pop = $('#ghostPop');
+const ghosts = $$('.ghost[data-pop]');
+function openPop(name) {
+  const same = !pop.hidden && pop.dataset.open === name;
+  ghosts.forEach(g => { const on = !same && g.dataset.pop === name; g.classList.toggle('on', on); g.setAttribute('aria-expanded', on); });
+  if (same) { pop.hidden = true; pop.dataset.open = ''; return; }
+  pop.dataset.open = name; pop.hidden = false;
+  $$('.gp-pane', pop).forEach(p => { p.hidden = p.dataset.pane !== name; });
+  const on = $(`.gp-pane[data-pane="${name}"] .on`, pop); if (on) on.scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+ghosts.forEach(g => g.addEventListener('click', () => openPop(g.dataset.pop)));
+$('.gp-x', pop).addEventListener('click', () => openPop(pop.dataset.open));
+document.addEventListener('pointerdown', e => { if (!pop.hidden && !e.target.closest('#ghostPop, .ghost, #stage canvas')) openPop(pop.dataset.open); });
+function syncGhosts() {
+  $('#gShape').innerHTML = `<svg viewBox="0 0 24 27" aria-hidden="true"><path d="${SHAPE_ICONS[design.shape]}"/></svg>`;
+  $('#gFinish').style.background = FINISH_SW[design.finish];
+  $('#gArt').textContent = ART_ICONS[design.art] === '∅' ? '✿' : ART_ICONS[design.art];
+  $('#gSkin').style.background = design.tone;
+}
+// skin tone: one smooth slider, fair → deep
+const slider = $('#toneSlider');
+slider.style.setProperty('--track', `linear-gradient(90deg, ${TONE_STOPS.join(', ')})`);
+slider.value = Math.round(TONE_DEFAULT * 1000);
+design.tone = toneAt(TONE_DEFAULT);
+const setTone = () => { design.tone = toneAt(slider.value / 1000); slider.style.setProperty('--thumb', design.tone); syncGhosts(); emit('tone'); };
+slider.addEventListener('input', setTone);
+slider.style.setProperty('--thumb', design.tone);
+onDesign(w => { if (w === 'shape' || w === 'finish' || w === 'art') syncGhosts(); });
+syncGhosts();
 
 const send = $('#sendDesign');
 const refresh = () => { send.href = smsHref(); };

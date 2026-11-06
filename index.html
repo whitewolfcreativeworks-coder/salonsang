@@ -258,6 +258,26 @@ setTimeout(function(){var h=document.documentElement;if(h.classList.contains('lo
   <div class="stage" id="stage" data-lenis-prevent>
     <div class="stage-loading" aria-hidden="true"><span></span><span></span><span></span></div>
     <p class="stage-tip" id="stageTip" aria-live="polite">Tap a nail for a full coat, or drag to paint.</p>
+
+    <!-- ghost controls, right in the picture -->
+    <div class="ghost-rail ghost-left" role="toolbar" aria-label="Design your nails">
+      <button type="button" class="ghost" data-pop="shape" aria-expanded="false"><i class="g-ico" id="gShape"></i><span>Shape</span></button>
+      <button type="button" class="ghost" data-pop="finish" aria-expanded="false"><i class="g-ico g-sw" id="gFinish"></i><span>Finish</span></button>
+      <button type="button" class="ghost" data-pop="art" aria-expanded="false"><i class="g-ico" id="gArt">✿</i><span>Art</span></button>
+      <button type="button" class="ghost" data-pop="skin" aria-expanded="false"><i class="g-ico g-sw" id="gSkin"></i><span>Skin</span></button>
+    </div>
+    <div class="ghost-rail ghost-right" role="toolbar" aria-label="Quick looks">
+      <button type="button" class="ghost" id="rainbow"><i class="g-ico g-rain"></i><span>Rainbow</span></button>
+      <button type="button" class="ghost" id="clearNails"><i class="g-ico">↺</i><span>Remove</span></button>
+    </div>
+    <div class="ghost-pop" id="ghostPop" hidden>
+      <div class="gp-pane" data-pane="shape"><span class="gp-title">Shape</span><div class="chips chips-shape" id="shapes"></div></div>
+      <div class="gp-pane" data-pane="finish"><span class="gp-title">Finish</span><div class="chips chips-finish" id="finishes"></div></div>
+      <div class="gp-pane" data-pane="art"><span class="gp-title">Nail art <small>on the ring fingers</small></span><div class="chips chips-art" id="arts"></div></div>
+      <div class="gp-pane" data-pane="skin"><span class="gp-title">Skin tone <small>slide to match yours</small></span>
+        <input type="range" id="toneSlider" class="tone-slider" min="0" max="1000" value="286" aria-label="Skin tone"></div>
+      <button type="button" class="gp-x" aria-label="Close">×</button>
+    </div>
   </div>
 
   <div class="panel-wrap">
@@ -266,21 +286,8 @@ setTimeout(function(){var h=document.documentElement;if(h.classList.contains('lo
       <div class="polish-wall" id="polishWall"></div>
     </div>
 
-    <div class="ctl-grid">
-      <div class="ctl"><span class="ctl-label">Finish</span><div class="chips chips-finish" id="finishes"></div></div>
-      <div class="ctl"><span class="ctl-label">Shape</span><div class="chips chips-shape" id="shapes"></div></div>
-      <div class="ctl"><span class="ctl-label">Nail art <small>ring finger accent</small></span><div class="chips chips-art" id="arts"></div></div>
-      <div class="ctl ctl-inline">
-        <span class="ctl-label">Skin tone</span><div class="tones" id="tones"></div>
-        <div class="mini-actions">
-          <button class="mini" id="paintAll" type="button">Paint all</button>
-          <button class="mini" id="rainbow" type="button">Rainbow set</button>
-          <button class="mini" id="clearNails" type="button">Remove</button>
-        </div>
-      </div>
-    </div>
-
     <div class="studio-cta">
+      <button class="btn btn-soft" id="paintAll" type="button" hidden>Paint all</button>
       <button class="btn btn-magic" id="tryOnBtn" type="button"><span class="btn-spark">✦</span> Try it on your own hand</button>
       <a class="btn btn-primary" id="sendDesign" href="sms:+15306484977">Text this design to Sang ♡</a>
     </div>

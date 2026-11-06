@@ -35,10 +35,20 @@ for i in range(1, ids.max() + 1):
     inside = lum[a > 0.5]
     nails.append(dict(id=i, slot=SLOT[i], c=[float(c[0] / OW), float(c[1] / OH)], ax=[float(ax[0]), float(ax[1])],
                       base=base / OW, tip=tip / OW, hw=halfw / OW, lum=float(np.median(inside)), hi=float(np.percentile(inside, 90))))
-# mask texture: R = nail id * 30, G = nail coverage, B = skin, A = 255
+# smooth nail shading (A): the real nail's broad light (dome, falloff) without its wavy chrome streaks.
+# Per nail: clip the bright reflections, then a normalized blur inside the nail, divided by the median.
+shade = np.full((OH, OW), 0.5, np.float32)
+for n in nails:
+    m = (idmap == n['id']).astype(np.float32)
+    Lc = np.minimum(lum, np.percentile(lum[m > 0], 60)) * m
+    num = cv2.GaussianBlur(Lc, (0, 0), 9); den = cv2.GaussianBlur(m, (0, 0), 9) + 1e-6
+    r = (num / den) / max(1e-3, float(np.median(lum[m > 0.5])))
+    grown = cv2.dilate(m, np.ones((9, 9), np.uint8)) > 0
+    shade[grown] = np.clip(r[grown] / 2.0, 0, 1)
+# mask texture: R = nail id * 30, G = nail coverage, B = skin, A = smooth shading (ratio / 2)
 skin_s = cv2.resize(skin, (OW, OH), interpolation=cv2.INTER_AREA)
 skin_s = np.clip(skin_s - alpha, 0, 1)
-mask = np.dstack([skin_s * 255, alpha * 255, idmap.astype(np.float32) * 30]).astype(np.uint8)   # BGR order for cv2
+mask = np.dstack([skin_s * 255, alpha * 255, idmap.astype(np.float32) * 30, shade * 255]).astype(np.uint8)   # BGRA order for cv2
 cv2.imwrite(os.path.join(OUT, 'images/studio-hand-mask.png'), mask, [cv2.IMWRITE_PNG_COMPRESSION, 9])
 cv2.imwrite(os.path.join(OUT, 'images/studio-hand.webp'), photo, [cv2.IMWRITE_WEBP_QUALITY, 84])
 sk = photo[skin_s > 0.6].mean(0)[::-1] / 255

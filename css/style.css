@@ -369,3 +369,45 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
 .bk-when{font-size:18px;margin:0 0 10px}.bk-when b{color:var(--pink-deep)}.bk-where{color:var(--ink-soft);font-size:14px;margin:0 0 12px}
 .bk-actions{display:grid;gap:10px;margin:16px 0 6px}
 .bk-close-link{border:0;background:none;color:var(--ink-soft);text-decoration:underline;padding:10px}
+
+/* ---------- studio: ghost controls inside the picture ---------- */
+#stage .stage-tip{top:12px;bottom:auto}
+.ghost-rail{position:absolute;top:50%;transform:translateY(-50%);z-index:3;display:grid;gap:8px}
+.ghost-left{left:10px}.ghost-right{right:10px}
+.ghost{display:grid;justify-items:center;gap:1px;width:54px;padding:7px 0 5px;border-radius:18px;border:1px solid rgba(255,255,255,.65);
+  background:rgba(255,255,255,.34);backdrop-filter:blur(12px) saturate(1.3);-webkit-backdrop-filter:blur(12px) saturate(1.3);
+  color:var(--ink);box-shadow:0 6px 18px rgba(59,42,47,.12);transition:background .2s,box-shadow .2s,transform .15s}
+.ghost span{font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;opacity:.85}
+.ghost:hover{background:rgba(255,255,255,.6)}
+.ghost:active{transform:scale(.95)}
+.ghost.on{background:rgba(255,255,255,.88);box-shadow:0 0 0 2px var(--pink),0 8px 20px rgba(214,58,120,.25)}
+.g-ico{display:grid;place-items:center;width:24px;height:24px;font-style:normal;font-size:18px;line-height:1;color:var(--pink-deep)}
+.g-ico svg{width:16px;height:19px;fill:#f2b6c9;stroke:var(--pink-deep);stroke-width:1.3}
+.g-sw{width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9),0 1px 4px rgba(0,0,0,.18)}
+.g-rain{width:22px;height:22px;border-radius:50%;background:conic-gradient(#1f8a5b,#d2c64c,#e07aa6,#7a3fb8,#3f6fb8,#1f8a5b);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9)}
+.ghost-pop{position:absolute;left:74px;right:74px;bottom:12px;z-index:4;padding:10px 40px 10px 14px;border-radius:22px;
+  background:rgba(255,255,255,.72);backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);
+  border:1px solid rgba(255,255,255,.85);box-shadow:0 14px 36px rgba(59,42,47,.18);animation:gpIn .22s ease-out}
+.ghost-pop[hidden]{display:none}
+@keyframes gpIn{from{transform:translateY(10px) scale(.98)}}
+.gp-pane[hidden]{display:none}
+.gp-title{display:block;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--pink-deep);margin:0 0 7px 2px}
+.gp-title small{letter-spacing:.02em;text-transform:none;font-weight:400;color:var(--ink-soft)}
+.ghost-pop .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 2px 4px;scroll-snap-type:x proximity}
+.ghost-pop .chips::-webkit-scrollbar{display:none}
+.ghost-pop .chips button{flex:none;scroll-snap-align:center;padding:6px 11px 6px 7px;font-size:13px;background:rgba(255,255,255,.85)}
+.gp-x{position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:50%;border:0;background:rgba(255,255,255,.9);color:var(--pink-deep);font-size:18px;line-height:1}
+.tone-slider{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin:2px 0 0}
+.tone-slider::-webkit-slider-runnable-track{height:14px;border-radius:999px;background:var(--track);box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+.tone-slider::-moz-range-track{height:14px;border-radius:999px;background:var(--track)}
+.tone-slider::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;margin-top:-7px;border-radius:50%;background:var(--thumb);border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.tone-slider::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:var(--thumb);border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+@media (max-width:759px){
+  .ghost{width:46px;padding:6px 0 4px;border-radius:15px}.ghost span{font-size:8.5px}
+  .g-ico{width:20px;height:20px;font-size:16px}
+  .ghost-rail{gap:6px}.ghost-left{left:7px}.ghost-right{right:7px}
+  .ghost-pop{left:8px;right:8px;bottom:8px;padding:8px 38px 8px 10px}
+}
+.ghost-pop .chips button.on{background:var(--pink);color:#fff}
+@media (max-width:759px){.ghost-pop{left:60px;right:60px}}
+.ghost-pop .chips{-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);background:none}

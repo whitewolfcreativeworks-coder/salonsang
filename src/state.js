@@ -8,6 +8,15 @@ export const COLORS = [
 ];
 export const RAINBOW = [['Emerald', '#1f8a5b'], ['Lemon', '#d2c64c'], ['Rose', '#e07aa6'], ['Violet', '#7a3fb8'], ['Ocean Blue', '#3f6fb8']];
 export const TONES = ['#f4d3c3', '#e5b493', '#c58763', '#8c583a', '#5c3826'];
+// continuous skin-tone slider: fair → deep brown (real skin, not grey or black). '#e5b493' = the photo as shot.
+export const TONE_STOPS = ['#f8e3d6', '#f1cfb8', '#e5b493', '#d39b74', '#bb8158', '#9c6641', '#7c4a2f', '#5d3622'];
+export const TONE_DEFAULT = 2 / 7;
+export function toneAt(t) {
+  t = Math.min(1, Math.max(0, t)) * (TONE_STOPS.length - 1);
+  const i = Math.min(TONE_STOPS.length - 2, Math.floor(t)), f = t - i;
+  const a = TONE_STOPS[i].match(/\w\w/g).map(h => parseInt(h, 16)), b = TONE_STOPS[i + 1].match(/\w\w/g).map(h => parseInt(h, 16));
+  return '#' + a.map((x, k) => Math.round(x + (b[k] - x) * f).toString(16).padStart(2, '0')).join('');
+}
 
 export const SHAPES = { square: 'Square', round: 'Round', almond: 'Almond', coffin: 'Coffin', stiletto: 'Stiletto' };
 export const FINISHES = { gloss: 'Gloss', cateye: 'Cat-eye', chrome: 'Chrome glaze', glitter: 'Glitter', jelly: 'Jelly', matte: 'Velvet matte' };
