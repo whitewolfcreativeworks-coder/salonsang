@@ -20,7 +20,7 @@ void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
 const FS = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 outColor;
-uniform sampler2D uPhoto, uMask, uPaint;
+uniform sampler2D uPhoto, uMask, uPaint, uProf;   // uProf: per-nail outline (left/right half-widths along the nail)
 uniform vec2 uView, uOff;          // screen px → photo px:  q = (frag - uOff) / uView
 uniform vec2 uRes, uPhotoPx;
 uniform float uTime; uniform vec2 uLight;
@@ -53,13 +53,47 @@ float profile(int s, float x){
   if (s == 0) return x < 0.82 ? 1.0 : 0.72 + 0.28 * sqrt(max(0.0, 1.0 - pow((x - 0.82) / 0.18, 2.0)));   // square, soft corners
   if (s == 1) return sqrt(max(0.0, 1.0 - pow(max(0.0, x - 0.35) / 0.65, 2.0)));                          // round
   if (s == 2) return pow(max(0.0, 1.0 - x * x), 0.75);                                                     // almond
-  if (s == 3) return x < 0.97 ? mix(1.0, 0.56, x) : 0.0;                                                   // coffin
+  if (s == 3) return mix(1.0, 0.56, x);                                                   // coffin
   return pow(max(0.0, 1.0 - x), 1.15);                                                                     // stiletto
 }
 float tipLen(int s){ return s == 0 ? 1.06 : s == 1 ? 1.04 : s == 2 ? 1.14 : s == 3 ? 1.2 : 1.36; }
 // where each shape starts to differ from the real (almond-ish) nail, and the real nail's half-width there
 float shapeStart(int s){ return s == 0 || s == 3 ? 0.5 : s == 1 ? 0.62 : 0.78; }
 float natW(float v){ return sqrt(max(0.0, 1.0 - pow(max(0.0, v - 0.45) / 0.6, 2.0))); }
+
+const int PN = 48;
+vec2 prof(int i, float v){                 // real nail's left/right half-width (in hw units) at v; negative = outside
+  float x = (v + 0.05) / 1.1 * float(PN - 1);
+  if (x < 0.0 || x > float(PN - 1)) return vec2(-0.3);
+  int k = int(floor(x)); float f = x - float(k);
+  return mix(texelFetch(uProf, ivec2(k, i), 0).rg, texelFetch(uProf, ivec2(min(k + 1, PN - 1), i), 0).rg, f);
+}
+float smax(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0); return mix(b, a, h) + k * h * (1.0 - h); }
+float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+float realW(int i, float v, float side){ vec2 p = prof(i, v); return side < 0.0 ? p.x : p.y; }
+// painted half-width: the real nail, smoothly grown into the chosen shape (no corners where they meet)
+float paintW(int i, float v, float side){
+  float wr = realW(i, v, side);
+  float s0 = shapeStart(uShape), Lx = tipLen(uShape);
+  float w0 = realW(i, s0, side);
+  float x = (v - s0) / (Lx - s0);
+  float ws = v < s0 ? w0 : (x <= 1.0 ? w0 * profile(uShape, x) : -0.3);
+  return mix(wr, smax(wr, ws, 0.1), smoothstep(s0 - 0.12, s0 + 0.08, v));
+}
+// studio lighting reflected in the clear coat: a dim room, bright ceiling, a tall softbox up-left and a small
+// lamp on the right (both drift with your finger / the phone's tilt)
+float sdRound(vec2 p, vec2 b, float r){ vec2 d = abs(p) - b + r; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r; }
+float envL(vec3 R, float rough){
+  float e = 0.22 + 0.3 * smoothstep(-0.4, 0.9, -R.y);
+  vec2 st = R.xy / (1.0 + max(R.z, -0.8));
+  vec2 c1 = vec2(-0.26 + uLight.x * 0.3, -0.36 + uLight.y * 0.18);
+  vec2 q = st - c1; q = vec2(0.94 * q.x + 0.34 * q.y, -0.34 * q.x + 0.94 * q.y);
+  e += 16.0 * (1.0 - smoothstep(-rough, rough + 0.02, sdRound(q, vec2(0.13, 0.36), 0.08)));
+  vec2 c2 = vec2(0.30 + uLight.x * 0.3, -0.34 + uLight.y * 0.18);       // second softbox, up-right
+  vec2 q2 = st - c2; q2 = vec2(0.94 * q2.x - 0.34 * q2.y, 0.34 * q2.x + 0.94 * q2.y);
+  e += 11.0 * (1.0 - smoothstep(-rough, rough + 0.02, sdRound(q2, vec2(0.11, 0.30), 0.07)));
+  return e;
+}
 
 vec3 artColor(int art, vec2 a, vec3 base, float t, out float cover){
   // a: x across the nail (-1..1), y along it (0 cuticle → 1 tip)
@@ -107,35 +141,54 @@ vec3 artColor(int art, vec2 a, vec3 base, float t, out float cover){
 }
 
 
-vec3 finish(vec3 base, float shade, float Ln, float spec, float glint, vec2 q, float un, float v, float ax01, vec3 under, int i){
+// signed distance to the polish edge (+ outside, in half-widths) at photo point pp for nail i:
+// the real nail's smoothed outline (baked offline) smoothly joined with the chosen shape's free edge
+float sdAt(int i, vec2 pp){
+  vec2 ax = uAx[i], pr = vec2(-ax.y, ax.x);
+  vec2 d = pp - vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x);
+  float u = dot(d, pr), hw = uHw[i], len = uTip[i] - uBase[i], kk = hw / len;
+  float v = (dot(d, ax) - uBase[i]) / len, ux = abs(u) / hw;
+  float sdR = -(texture(uMask, vec2(pp.x, pp.y * uPhotoPx.x / uPhotoPx.y)).r * 255.0 - 128.0) / 8.0 / (hw * uPhotoPx.x);
+  float s0 = shapeStart(uShape), Lx = tipLen(uShape);
+  float w0 = max(realW(i, s0, u < 0.0 ? -1.0 : 1.0), 0.3), xs = clamp((v - s0) / (Lx - s0), 0.0, 1.0);
+  float Ws = w0 * profile(uShape, xs), dWs = (w0 * profile(uShape, min(xs + 0.02, 1.0)) - Ws) / (0.02 * (Lx - s0)) * kk;
+  float sdS = v < s0 ? ux - min(w0, realW(i, v, u < 0.0 ? -1.0 : 1.0)) : (ux - Ws) / sqrt(1.0 + dWs * dWs);
+  sdS = max(sdS, (v - Lx) / kk);                     // the free edge (flat for square / coffin)
+  return smin(sdR, sdS, 0.12);
+}
+
+// pc = albedo × light, then the clear coat on top. N: surface normal (photo coords, z toward you)
+vec3 finish(vec3 base, vec3 N, float Ln, vec2 q, float sx, float v, vec3 under, int i){
+  vec3 Ld = normalize(vec3(-0.35 + uLight.x * 0.4, -0.6 + uLight.y * 0.25, 0.72));
+  float ndl = max(dot(N, Ld), 0.0), nv = clamp(N.z, 0.0, 1.0);
+  float diff = (0.52 + 0.6 * ndl) * Ln;
+  vec3 R = vec3(2.0 * N.z * N.xy, 2.0 * N.z * N.z - 1.0);
+  float F = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+  float coatK = 1.0, rough = 0.012;
   vec3 pc;
-  if (uFinish == 1) {                                   // velvet matte
-    pc = base * clamp(mix(1.0, Ln, 0.3), 0.75, 1.15) * 1.05 + 0.02 * (hash(q) - 0.5);
-    spec = 0.0; glint = 0.0;
+  if (uFinish == 1) {                                   // velvet matte: soft, no mirror
+    pc = base * (0.5 + 0.6 * ndl) * Ln * 1.05 + 0.012 * (hash(q) - 0.5);
+    coatK = 0.12; rough = 0.35;
   } else if (uFinish == 2) {                            // jelly: sheer, juicy
-    pc = mix(under, base * 0.85, 0.62) * shade;
+    pc = mix(under, base * 0.8, 0.62) * diff;
   } else if (uFinish == 3) {                            // chrome glaze: pearly, glazed donut
-    float ang = un * 1.4 + v * 1.8 + uLight.x * 2.0 + uLight.y;
+    float ang = sx * 1.3 + v * 1.6 + uLight.x * 2.0 + uLight.y;
     vec3 iri = 0.5 + 0.5 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + ang * 0.35));
-    pc = mix(base, vec3(1.0), 0.14) * shade + toLinI(iri) * 0.12 * (0.5 + 0.5 * shade);
-    glint *= 1.6; spec *= 1.2;
+    pc = mix(base, vec3(1.0), 0.18) * diff + toLinI(iri) * 0.10 * envL(R, 0.3) * 0.25;
+    coatK = 1.25; rough = 0.03;
   } else if (uFinish == 4) {                            // cat-eye: a band of light that follows the magnet
-    float bp = uLight.x * 0.9;
-    float band = exp(-pow((un - bp) / 0.32, 2.0));
+    float band = exp(-pow((sx - uLight.x * 0.9) / 0.34, 2.0));
     float sparkle = 0.65 + 0.35 * hash(floor(q * 0.9) + floor(uTime * 3.0));
-    pc = base * 0.22 * shade + (base * 1.5 + 0.18) * band * sparkle * (0.7 + 0.3 * shade);
-    glint *= 0.5;
-  } else if (uFinish == 5) {                            // glitter flakes
+    pc = base * 0.2 * diff + (base * 1.5 + 0.15) * band * sparkle * (0.6 + 0.4 * ndl);
+  } else if (uFinish == 5) {                            // glitter flakes under the top coat
     vec2 cell = floor(q * 0.55); float h = hash(cell);
     float flake = step(0.72, h) * pow(max(0.0, sin(uTime * 2.0 + h * 50.0 + uLight.x * 9.0)), 10.0);
     vec3 fc = mix(vec3(1.0, 0.9, 0.6), vec3(1.0), step(0.86, h));
-    pc = base * shade * 0.9 + fc * flake * 1.4 + base * 0.15 * step(0.72, h);
-  } else {                                              // classic gloss
-    pc = base * shade;
+    pc = base * diff * 0.9 + fc * flake * 1.4 + base * 0.15 * step(0.72, h);
+  } else {                                              // classic gel gloss
+    pc = base * diff;
   }
-  pc = mix(pc, vec3(1.0), clamp(spec, 0.0, 1.0)) + vec3(glint * 0.45);
-  pc *= mix(0.88, 1.0, 1.0 - smoothstep(0.7, 1.05, ax01));  // a touch richer at the side walls
-  pc *= mix(0.9, 1.0, smoothstep(0.02, 0.08, v));             // soft cuticle edge
+  pc += vec3(F * envL(R, rough) * coatK);
   return pc;
 }
 
@@ -145,16 +198,12 @@ void main(){
   vec2 uv = q / uPhotoPx;
   vec3 photo = toLin(texture(uPhoto, uv).rgb);
   vec4 mk = texture(uMask, uv);
-  ivec2 tx = clamp(ivec2(uv * uPhotoPx), ivec2(0), ivec2(uPhotoPx) - 1);
-  vec4 mkx = texelFetch(uMask, tx, 0);
-  float skin = mk.b, realA = mk.g; int rid = int(floor(mkx.r * 255.0 / 30.0 + 0.5));
-  if (rid == 0 && realA > 0.02) {            // edge pixel: borrow the id of a neighbour inside the nail
-    for (int k = 0; k < 4; k++) { ivec2 o = k == 0 ? ivec2(1,0) : k == 1 ? ivec2(-1,0) : k == 2 ? ivec2(0,1) : ivec2(0,-1);
-      int r2 = int(floor(texelFetch(uMask, clamp(tx + o, ivec2(0), ivec2(uPhotoPx) - 1), 0).r * 255.0 / 30.0 + 0.5)); if (r2 > 0) { rid = r2; break; } }
-  }
-  // skin tone
-  vec3 col = mix(photo, photo * uToneMul, skin);
+  float skin = mk.b, realA = mk.g;
+  // skin tone: relight the matted skin, keep its natural shine; bare nail beds follow a little
   float L = dot(texture(uPhoto, uv).rgb, vec3(0.299, 0.587, 0.114));
+  vec3 toned = photo * uToneMul + photo * (1.0 - uToneMul) * smoothstep(0.72, 0.95, L) * 0.6;
+  vec3 col = mix(photo, toned, skin);
+  col = mix(col, photo * mix(vec3(1.0), uToneMul, 0.35), realA * (1.0 - skin));
   float shadowAcc = 0.0;
   vec2 p = vec2(uv.x, uv.y * uPhotoPx.y / uPhotoPx.x);   // photo-width units
   float aa = 1.2 / (uView.x * uPhotoPx.x);                // ~1 screen px in photo-width units
@@ -163,80 +212,68 @@ void main(){
     vec2 ax = uAx[i], pr = vec2(-ax.y, ax.x);
     vec2 d = p - vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x);
     float t = dot(d, ax), u = dot(d, pr);
-    float len = uTip[i] - uBase[i];
-    float v = (t - uBase[i]) / len;                      // 0 cuticle → 1 tip
-    if (v < -0.2 || v > 1.6 || abs(u) > uHw[i] * 1.6) continue;
-    float hw = uHw[i];
-    float Lx = tipLen(uShape);
-    float s0 = shapeStart(uShape);
-    float x = (v - s0) / (Lx - s0);
-    float w0 = (uShape == 0 || uShape == 3) ? 1.0 : natW(s0);
-    float w = hw * w0 * profile(uShape, x);
-    float ext = (1.0 - smoothstep(-aa, aa, abs(u) - w)) * (1.0 - smoothstep(Lx - 0.004, Lx + aa / len, v)) * smoothstep(s0 - 0.02, s0 + 0.02, v);
-    float real = rid == i + 1 ? realA : 0.0;
+    float len = uTip[i] - uBase[i], hw = uHw[i];
+    float v = (t - uBase[i]) / len;                      // 0 cuticle → 1 real tip
+    if (v < -0.1 || v > 1.6 || abs(u) > hw * 1.8) continue;
     vec4 newC = uCol[i], oldC = uPrev[i];
-    float cover = real;
-    // soft shadow of the longer free edge onto whatever is underneath
-    if (real < 0.5 && v > s0 && (newC.a > 0.5 || oldC.a > 0.5)) {
-      vec2 sp = vec2(u + hw * 0.08, v - 0.04);
-      float ws = hw * w0 * profile(uShape, (sp.y - s0) / (Lx - s0)) * 1.08;
-      shadowAcc = max(shadowAcc, 0.3 * (1.0 - smoothstep(0.0, hw * 0.35, abs(sp.x) - ws)) * (1.0 - smoothstep(Lx - 0.02, Lx + 0.08, sp.y)) * step(0.6, sp.y));
+    if (newC.a < 0.5 && oldC.a < 0.5 && uPulse[i] <= 0.0) continue;   // bare nail: leave the photo untouched
+    float side = u < 0.0 ? -1.0 : 1.0, ux = abs(u) / hw;
+    float px = aa / hw;                                   // one screen pixel, in half-widths
+    float kk = hw / len;
+    float W = paintW(i, v, side);
+    float sd = sdAt(i, p);
+    float sdR = -(mk.r * 255.0 - 128.0) / 8.0 / (hw * uPhotoPx.x);
+    float s0 = shapeStart(uShape), Lx = tipLen(uShape), w0 = max(realW(i, s0, side), 0.3);
+    float shapeCov = 1.0 - smoothstep(-px * 0.7, px * 0.7, sd);
+    if (newC.a > 0.5 || oldC.a > 0.5) {                  // skin right around the polish follows the chosen tone too
+      vec3 ps = toSrgb(photo); float sat = max(ps.r, max(ps.g, ps.b)) - min(ps.r, min(ps.g, ps.b));
+      float near = max(realA, 1.0 - smoothstep(px * 4.0, 0.45, sd)) * smoothstep(0.05, 0.12, sat);
+      col = mix(col, toned, clamp(near * (1.0 - skin), 0.0, 1.0) * smoothstep(0.0, px, sd));
     }
-    if (max(real, ext) <= 0.001) continue;
-    if (uCol[i].a < 0.5 && uPrev[i].a < 0.5 && uPulse[i] <= 0.0) continue;   // bare nail: leave the photo untouched
-    bool onReal = rid == i + 1 && realA > 0.5;
-    vec2 a = vec2(u / max(w, hw * 0.25), v);           // nail-local, x normalized to the current width
-    float ax01 = clamp(abs(u) / hw, 0.0, 1.0);
+    // soft shadow of a longer free edge onto whatever is underneath
+    float inReal = 1.0 - smoothstep(-px, px, sdR);
+    if (inReal < 0.5 && v > 0.85 && sd > 0.0 && (newC.a > 0.5 || oldC.a > 0.5)) {
+      float u2 = u + hw * 0.07, v2 = v - 0.035;
+      float x2 = (v2 - s0) / (Lx - s0);
+      float s2 = x2 < 0.0 || x2 > 1.0 ? 9.0 : abs(u2) / hw - w0 * profile(uShape, x2);
+      shadowAcc = max(shadowAcc, 0.28 * (1.0 - smoothstep(0.0, 0.3, s2)));
+    }
+    if (shapeCov <= 0.001) continue;
 
     // how much of the new coat is on: three brush strokes (center, left, right), then full
     float pg = uProg[i], fresh = 0.0;
     if (pg >= 3.0) fresh = 1.0; else {
-      for (int k = 0; k < 3; k++) {
-        float cx = k == 0 ? 0.0 : (k == 1 ? -0.55 : 0.55);
-        float reach = clamp(pg - float(k), 0.0, 1.0) * (Lx + 0.08);
+      for (int k2 = 0; k2 < 3; k2++) {
+        float cx = k2 == 0 ? 0.0 : (k2 == 1 ? -0.55 : 0.55);
+        float reach = clamp(pg - float(k2), 0.0, 1.0) * (tipLen(uShape) + 0.08);
         fresh = max(fresh, (1.0 - smoothstep(0.55, 0.7, abs(u / hw - cx))) * (1.0 - smoothstep(reach - 0.06, reach, v)) * step(0.001, reach));
       }
     }
     if (uManual[i] > 0.5) fresh = max(fresh, texture(uPaint, uv).r);
     if (newC.a < 0.5) fresh = 0.0;
-    float painted = max(fresh, oldC.a > 0.5 ? 1.0 : 0.0);
-    float realP = smoothstep(0.3, 0.75, real) * smoothstep(0.012, 0.05, v);   // polish sits just inside the nail, clean cuticle line
-    cover = max(mix(real, realP, painted), ext * painted);
-    if (cover <= 0.001) continue;
-    // light for the longer free edge: borrow it from just inside the real nail's tip, at the same relative spot
-    float Lsrc = mk.a * 2.0; bool synth = !onReal;
-    if (synth) {
-      float vc = min(v, 0.86), uc = u / max(w, 1e-4) * hw * natW(vc) * 0.92;
-      vec2 pp = vec2(uC[i].x, uC[i].y * uPhotoPx.y / uPhotoPx.x) + ax * (uBase[i] + vc * len) + pr * uc;
-      vec2 uv2 = vec2(pp.x, pp.y * uPhotoPx.x / uPhotoPx.y);
-      Lsrc = texture(uMask, uv2).a * 2.0;
-    }
-    // light: borrow the photo's real light on the real nail, synthesize it on longer free edges
-    float Ln = clamp(Lsrc, 0.6, 1.4);
-    float un = u / hw;
-    // smooth, glassy gel: the real nail's broad light × a clean dome, no wavy streaks
-    float dome = 0.9 + 0.1 * cos(clamp(un, -1.2, 1.2) * 1.3);
-    float shade = clamp(mix(1.0, Ln, 0.75), 0.7, 1.2) * dome * (synth ? 1.0 - 0.06 * smoothstep(0.95, Lx, v) : 1.0);
-    // one long gel highlight that curves with the nail and slides with your finger / phone tilt, plus a soft tip glow
-    float hp = -0.42 + uLight.x * 0.22 + 0.10 * (v - 0.5) * (v - 0.5);
-    float hwid = 0.075 + 0.03 * smoothstep(0.2, 0.8, v);
-    float along = smoothstep(0.1, 0.24, v) * (1.0 - smoothstep(Lx - 0.32, Lx - 0.12, v));
-    float spec = (1.0 - smoothstep(hwid * 0.55, hwid, abs(un - hp))) * along * 0.78;
-    spec += exp(-pow((un + 0.1 - uLight.x * 0.1) / 0.32, 2.0) - pow((v - Lx * 0.82) / 0.1, 2.0)) * 0.16;
-    float glint = exp(-pow((un - 0.38 - uLight.x * 0.15) / 0.06, 2.0)) * smoothstep(0.35, 0.55, v) * (1.0 - smoothstep(0.7, 0.9, v)) * 0.35;
-    vec3 bareCol = real > 0.001 ? col : toLin(vec3(0.94, 0.86, 0.83)) * shade;
-    vec3 under = toLin(vec3(0.93, 0.83, 0.79)) * shade;      // a clean natural nail under sheer jelly
-    vec3 oldCol = bareCol;
-    if (oldC.a > 0.5) oldCol = finish(toLin(oldC.rgb), shade, Ln, spec, glint, q, u / hw, v, ax01, under, i);
-    vec3 nailCol = oldCol;
+
+    // the surface: a gel C-curve across, a gentle slope down to the free edge, rounded edges all round
+    float sx = clamp(ux / max(W, 0.05), 0.0, 1.0) * side;          // -1 .. 1 across the nail
+    float dhx = -0.5 * sx * pow(max(1.0 - sx * sx, 0.02), -0.35);
+    float dhy = -0.28 * (v - 0.35);
+    vec2 n2 = vec2(-dhx, -dhy);
+    float roll = 1.0 - smoothstep(0.0, 0.16, -sd);                 // the polish edge rounds over
+    vec2 outward = vec2(0.0);
+    if (roll > 0.001) { float ge = hw * 0.04; outward = normalize(vec2(sdAt(i, p + vec2(ge, 0.0)) - sd, sdAt(i, p + vec2(0.0, ge)) - sd) + 1e-6); }
+    vec3 N = normalize(vec3(n2.x * pr + n2.y * ax + outward * roll * 0.5, 1.0));
+    // keep the photo's broad light (the hand's own shadows) on the real nail, fading out past it
+    float Ln = mix(1.0, clamp(mk.a * 2.0, 0.6, 1.4), 0.45 * inReal * (1.0 - smoothstep(0.85, 1.0, v)));
+    vec3 under = toLin(vec3(0.93, 0.83, 0.79));                     // a clean natural nail under sheer jelly
+    vec2 a = vec2(sx, v);
+
+    if (oldC.a > 0.5) col = mix(col, finish(toLin(oldC.rgb), N, Ln, q, sx, v, under, i), shapeCov);
     if (fresh > 0.0) {
       vec3 base = toLin(newC.rgb);
       float artCover = 0.0;
       if (uArt != 0 && (uArt == 5 || uAccent[i] > 0.5)) base = toLin(artColor(uArt, a, toSrgb(base), uTime, artCover));
-      nailCol = mix(oldCol, finish(base, shade, Ln, spec, glint, q, u / hw, v, ax01, under, i), fresh);
+      col = mix(col, finish(base, N, Ln, q, sx, v, under, i), shapeCov * fresh);
     }
-    nailCol += vec3(0.25, 0.12, 0.18) * uPulse[i] * max(0.0, 1.0 - v) * 0.5;
-    col = mix(col, nailCol, cover);
+    col += vec3(0.25, 0.12, 0.18) * uPulse[i] * max(0.0, 1.0 - v) * 0.5 * shapeCov;
   }
   col *= 1.0 - shadowAcc;
   outColor = vec4(toSrgb(col), 1.0);
@@ -292,6 +329,11 @@ export function createStudio(container, { onReady, onTip } = {}) {
   gl.uniform1fv(u('uHw'), NAILS.map(n => n.hw)); gl.uniform1fv(u('uLum'), NAILS.map(n => n.lum)); gl.uniform1fv(u('uHi'), NAILS.map(n => n.hi));
   gl.uniform1fv(u('uAccent'), NAILS.map(n => n.slot === ACCENT_SLOT ? 1 : 0));
   gl.uniform2f(u('uPhotoPx'), PHOTO.w, PHOTO.h);
+  // nail outlines: 48 × N texels of (left, right) half-widths
+  const PN = NAILS[0].wl.length, profData = new Float32Array(PN * NAILS.length * 2);
+  NAILS.forEach((n, i) => { for (let k = 0; k < PN; k++) { profData[(i * PN + k) * 2] = n.wl[k]; profData[(i * PN + k) * 2 + 1] = n.wr[k]; } });
+  tex(3, gl.NEAREST); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, PN, NAILS.length, 0, gl.RG, gl.FLOAT, profData);
+  gl.uniform1i(u('uProf'), 3);
 
   // ---------- nail state ----------
   const hexRgb = h => { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255); };

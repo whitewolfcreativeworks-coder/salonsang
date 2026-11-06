@@ -9,8 +9,10 @@ export const COLORS = [
 export const RAINBOW = [['Emerald', '#1f8a5b'], ['Lemon', '#d2c64c'], ['Rose', '#e07aa6'], ['Violet', '#7a3fb8'], ['Ocean Blue', '#3f6fb8']];
 export const TONES = ['#f4d3c3', '#e5b493', '#c58763', '#8c583a', '#5c3826'];
 // continuous skin-tone slider: fair → deep brown (real skin, not grey or black). '#e5b493' = the photo as shot.
-export const TONE_STOPS = ['#f8e3d6', '#f1cfb8', '#e5b493', '#d39b74', '#bb8158', '#9c6641', '#7c4a2f', '#5d3622'];
-export const TONE_DEFAULT = 2 / 7;
+// Real skin tones in CIELAB, from light (ITA ~56°) through intermediate, tan and brown to dark brown (ITA ~-39°).
+// Most of the slider covers tan → brown, where most people are. Index 1 is the photo as shot.
+export const TONE_STOPS = ['#e8c2a4', '#e5b493', '#d0a27e', '#c39470', '#b98966', '#ae7f5c', '#a37554', '#976b4e', '#8b6148', '#7e5842', '#724f3e'];
+export const TONE_DEFAULT = 1 / 10;
 export function toneAt(t) {
   t = Math.min(1, Math.max(0, t)) * (TONE_STOPS.length - 1);
   const i = Math.min(TONE_STOPS.length - 2, Math.floor(t)), f = t - i;

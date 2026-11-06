@@ -95,7 +95,7 @@
         gsap.from(els, { y: 46, opacity: 0, duration: 1, ease: 'power3.out', stagger: 0.08, scrollTrigger: { trigger: els[0], start: 'top 88%' } });
       });
       gsap.from('.tile', { x: 80, opacity: 0, rotate: 3, duration: 1, ease: 'power3.out', stagger: 0.07, scrollTrigger: { trigger: '.strip', start: 'top 85%' } });
-      gsap.fromTo('.stage', { clipPath: 'inset(8% 6% 8% 6% round 40px)' }, { clipPath: 'inset(0% 0% 0% 0% round 32px)', ease: 'none', scrollTrigger: { trigger: '.stage', start: 'top 95%', end: 'top 35%', scrub: true } });
+      gsap.fromTo('.stage', { clipPath: 'inset(8% 6% 8% 6% round 40px)' }, { clipPath: 'inset(0% 0% 0% 0% round 32px)', ease: 'none', scrollTrigger: { trigger: '.stage', start: 'top 95%', end: 'top 70%', scrub: true } });
     }
   }
 

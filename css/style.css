@@ -411,3 +411,26 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
 .ghost-pop .chips button.on{background:var(--pink);color:#fff}
 @media (max-width:759px){.ghost-pop{left:60px;right:60px}}
 .ghost-pop .chips{-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);background:none}
+/* bigger ghost buttons (Jason: a little small) */
+.ghost{width:68px;padding:9px 0 7px;border-radius:21px;gap:3px}
+.ghost span{font-size:11px}
+.g-ico{width:30px;height:30px;font-size:22px}
+.g-ico svg{width:20px;height:24px}
+.g-sw,.g-rain{width:27px;height:27px}
+.ghost-rail{gap:10px}.ghost-left{left:12px}.ghost-right{right:12px}
+.ghost-pop{left:92px;right:92px}
+@media (max-width:759px){
+  .ghost{width:56px;padding:7px 0 5px;border-radius:17px}.ghost span{font-size:9.5px}
+  .g-ico{width:25px;height:25px;font-size:19px}.g-ico svg{width:17px;height:21px}
+  .g-sw,.g-rain{width:23px;height:23px}
+  .ghost-rail{gap:7px}.ghost-left{left:8px}.ghost-right{right:8px}
+  .ghost-pop{left:70px;right:70px}
+}
+/* phones: the controls sit in one row along the top of the picture (no nails there), tip just under them */
+@media (max-width:759px){
+  .ghost-rail{top:8px;transform:none;display:flex;gap:6px}
+  .ghost-left{left:8px}.ghost-right{right:8px}
+  .ghost{width:52px;padding:6px 0 4px;border-radius:16px}
+  #stage .stage-tip{top:74px}
+  .ghost-pop{left:8px;right:8px;bottom:8px}
+}
