@@ -120,8 +120,8 @@
   /* ---------- friends ---------- */
   const notes = {
     1: 'Your own private hour. Put your phone down, sink in, and let Sang take care of you.',
-    2: 'Bring your bestie, your mom or your sister. One of you in the massage chair, one at the desk, catching up the whole time.',
-    3: 'Room for a third who comes along for the company, perfect for a little one or a friend who just wants to hang out. (Two services at a time.)'
+    2: 'Bring your bestie, your mom or your sister. Book back-to-back appointments and come in together: Sang takes care of one of you, then the other, and you catch up the whole time. Sang works on one person at a time, so two services can’t happen at once.',
+    3: 'Room for a third who comes along for the company, perfect for a little one or a friend who just wants to hang out. Services are one person at a time, booked back to back.'
   };
   $$('.seg button').forEach(b => b.addEventListener('click', () => {
     const n = +b.dataset.n;

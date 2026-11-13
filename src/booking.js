@@ -107,7 +107,8 @@ async function renderTime() {
         <span>${d === ymd() ? 'Today' : fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b><i>${fmtDate(d, { month: 'short' })}</i>
       </button>`).join('')}</div>
     <p class="bk-label">${esc(relDay(state.day))}</p>
-    <div class="bk-times">${byDay[state.day].map(t => `<button type="button" class="bk-time${state.time?.getTime() === t.getTime() ? ' on' : ''}" data-t="${t.toISOString()}">${fmtTime(t)}</button>`).join('')}</div>`
+    <div class="bk-times">${byDay[state.day].map(t => `<button type="button" class="bk-time${state.time?.getTime() === t.getTime() ? ' on' : ''}" data-t="${t.toISOString()}">${fmtTime(t)}</button>`).join('')}</div>
+    <p class="bk-sub bk-friend">Coming with a friend? Sang takes care of one person at a time, so book your appointments back to back 💕</p>`
     : `<div class="bk-msg"><p>No open times online in the next few weeks for this one, but Sang can often squeeze you in 💖</p><a class="btn btn-pink" href="sms:${SALON_PHONE}">Text Sang</a></div>`}
     <div class="bk-foot"><button type="button" class="btn btn-ghost bk-prev">← Service</button><button type="button" class="btn btn-pink bk-next" ${state.time ? '' : 'disabled'}>Almost done →</button></div>`);
   const b = $('.bk-body', sheet);
@@ -165,6 +166,7 @@ function done(r, v) {
       <h3>You're booked, ${esc(first)}!</h3>
       <p class="bk-when"><b>${esc(what)}</b><br>${esc(relDay(ymd(start)))} at ${fmtTime(start)}</p>
       <p class="bk-where">Salon Sang · Sola Salon Studios, Suite 12<br>440 W 6th Ave, Eugene</p>
+      <p class="bk-sub">Bringing a friend? Book their appointment to start at ${fmtTime(end)}, right when yours ends.</p>
       ${v.textsOk ? `<p class="bk-sub">A confirmation text is on its way to ${esc(prettyPhone(v.phone))}, and a sweet reminder will come on the day ✨</p>` : ''}
       <div class="bk-actions">
         <a class="btn btn-pink" download="salon-sang.ics" href="${ics(what, start, end)}">Add to my calendar</a>
