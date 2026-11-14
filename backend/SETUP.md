@@ -31,6 +31,7 @@ Claude puts them in `src/config.js`, rebuilds and pushes. Then **Book online** a
 Follow **salonsang.com/portal/setup.html** (home-screen app, ntfy alerts, the "Salon Sang texts" shortcut + hourly automations).
 
 ## How it works
+- **Taxes + Supplies** (portal tabs): the same SQL also creates `receipts` (receipt photos + notes), `supplies` and `supply_log`, an optional **Paid** amount on appointments, and a private Storage bucket **receipts** for the photos (only Sang's login can see them). Nothing else to set up. If you ran an older copy of the SQL before, just run the new one again; it's safe to re-run.
 - `salon-sang.sql` creates the tables, the security rules (row-level security: the public can only read the menu, see free times and book one; only Sang's login sees appointments), the booking and reminder logic, and a 15-minute housekeeping job.
 - Texts are queued in `messages`. Confirmations are due right away; reminders ~4 hours before (setting), never before 8 AM. The iPhone shortcut fetches due texts (`rpc/phone_outbox` with the secret phone key), sends them from Sang's number, and marks each sent (`rpc/phone_sent`). Message wording is written fresh at send time, so "today/tomorrow" is always right.
 - New online bookings alert Sang through ntfy.sh (free, open source) with a secret topic name.

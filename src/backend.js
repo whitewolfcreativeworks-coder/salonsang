@@ -62,6 +62,25 @@ const Live = {
   async clients(q) { return unwrap(await (await sb()).rpc('owner_clients', { p_q: q || '' })); },
   async setup() { return unwrap(await (await sb()).rpc('owner_setup')); },
   async templatePreview(tpl, start) { return unwrap(await (await sb()).rpc('template_preview', { p_tpl: tpl, p_start: start ? start.toISOString() : null })); },
+  // ---- portal: taxes (receipts + notes, photos in the private 'receipts' bucket)
+  async receipts(fromDay, toDay) { return unwrap(await (await sb()).from('receipts').select('*').gte('day', fromDay).lt('day', toDay).order('day', { ascending: false }).order('id', { ascending: false })); },
+  async saveReceipt(r) { const c = await sb(); const { id, ...rest } = r; return unwrap(id ? await c.from('receipts').update(rest).eq('id', id).select().single() : await c.from('receipts').insert(rest).select().single()); },
+  async deleteReceipt(r) { const c = await sb(); unwrap(await c.from('receipts').delete().eq('id', r.id)); if (r.photo_path) await c.storage.from('receipts').remove([r.photo_path]); },
+  async uploadPhoto(blob) {
+    const path = `${new Date().getFullYear()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${/png/.test(blob.type) ? 'png' : /heic/.test(blob.type) ? 'heic' : 'jpg'}`;
+    unwrap(await (await sb()).storage.from('receipts').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false })); return path;
+  },
+  async photoUrls(paths) {
+    if (!paths.length) return {};
+    const r = unwrap(await (await sb()).storage.from('receipts').createSignedUrls(paths, 3600));
+    return Object.fromEntries(r.filter(x => x.signedUrl).map(x => [x.path, x.signedUrl]));
+  },
+  // ---- portal: supplies
+  async supplies() { return unwrap(await (await sb()).from('supplies').select('*').eq('active', true).order('kind').order('name')); },
+  async saveSupply(x) { const c = await sb(); const { id, ...rest } = x; return unwrap(id ? await c.from('supplies').update(rest).eq('id', id).select().single() : await c.from('supplies').insert(rest).select().single()); },
+  async logSupply(supply_id, kind, qty = 1, cost = null) { return unwrap(await (await sb()).from('supply_log').insert({ supply_id, kind, qty, cost }).select().single()); },
+  async undoLog(id) { unwrap(await (await sb()).from('supply_log').delete().eq('id', id)); },
+  async supplyLog(from, to) { return unwrap(await (await sb()).from('supply_log').select('*').gte('at', from.toISOString()).lt('at', to.toISOString()).order('at')); },
   supabaseUrl: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY
 };
 
@@ -86,8 +105,21 @@ function demoState() {
       confirm_template: "Hi {first}! 💅 You're all booked at Salon Sang: {service}, {when}. Sola Salon Studios, Suite 12 (440 W 6th Ave). Can't wait to see you! ✨ Need to change it? Just reply or call 530-648-4977 💖",
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
       reminder_template_pm: "Hi {first}! ✨ Just a sweet reminder: your {service} with Sang is today at {time}. Salon Sang · Sola Salon Studios, Suite 12. See you soon! 💅 Need to change it? Reply or call 530-648-4977 💖" },
-    services: SERVICES.map(x => ({ ...x })), openings: [], appointments: [], messages: [], seq: 100
+    services: SERVICES.map(x => ({ ...x })), openings: [], appointments: [], messages: [], seq: 100,
+    receipts: [], supplies: [], supplyLog: [], photos: {}
   };
+  // pretend bookkeeping: a few past visits, supplies with some history, a receipt and a note
+  const past = [['Mai Tran', 'Premier Gel Pedicure', 80], ['Jessica Rivera', 'Gel Manicure', 45], ['Linh Nguyen', 'Dipping full set', null], ['Brooke Adams', 'Spa Pedicure', 50]];
+  for (let i = 1; i <= 40; i++) { const [n, svc, paid] = past[i % 4]; const d = addDays(today, -i * 2);
+    s.appointments.push({ id: ++s.seq, service_id: null, service_name: svc, addons: [], starts_at: at(d, '11:00').toISOString(), ends_at: at(d, '12:00').toISOString(),
+      client_name: n, client_phone: null, note: null, source: 'portal', status: 'done', texts_ok: false, send_confirmation: false, paid, created_at: new Date().toISOString() }); }
+  const sup = (name, kind, on_hand, unit_price, uses) => { const x = { id: ++s.seq, name, kind, on_hand, low_at: 1, unit_price, note: null, active: true };
+    s.supplies.push(x); s.supplyLog.push({ id: ++s.seq, supply_id: x.id, kind: 'bought', qty: on_hand + uses.length, cost: unit_price * (on_hand + uses.length), at: at(addDays(today, -70)).toISOString() });
+    uses.forEach(dd => s.supplyLog.push({ id: ++s.seq, supply_id: x.id, kind: 'used', qty: 1, cost: null, at: at(addDays(today, -dd)).toISOString() })); };
+  sup('OPI Big Apple Red', 'Polish', 2, 11.5, [60, 38, 15]); sup('Pink & White dip powder', 'Dip powder', 1, 18, [50, 22]);
+  sup('Acetone (gallon)', 'Tools', 0, 24, [40, 9]); sup('Shea butter lotion', 'Lotion', 3, 9, []);
+  s.receipts.push({ id: ++s.seq, kind: 'receipt', day: addDays(today, -12), amount: 46.18, note: 'Sally Beauty: dip liquids and files', photo_path: null, created_at: new Date().toISOString() },
+                  { id: ++s.seq, kind: 'note', day: addDays(today, -30), amount: null, note: 'Paid Sola suite rent for the month with a check', photo_path: null, created_at: new Date().toISOString() });
   for (let i = 0; i < 14; i++) {
     const d = addDays(today, i), wd = weekday(d);
     if (wd === 0) continue;
@@ -184,6 +216,20 @@ const Demo = {
       m.set(a.client_phone, { name: a.client_name, phone: a.client_phone, last_visit: a.starts_at, visits: 1 }); }); return [...m.values()].slice(0, 12); },
   async setup() { return { phone_token: 'demo-token-1234', ntfy_topic: 'salonsang-demo' }; },
   async templatePreview(tpl, start) { const s = st(); return demoRender(s, tpl, { client_name: 'Jessica Rivera', service_name: 'Gel Manicure', addons: [], starts_at: (start || new Date(Date.now() + 5 * 3600e3)).toISOString() }); },
+  async receipts(fromDay, toDay) { await wait(120); return st().receipts.filter(r => r.day >= fromDay && r.day < toDay).sort((a, b) => b.day.localeCompare(a.day) || b.id - a.id).map(r => ({ ...r })); },
+  async saveReceipt(r) { await wait(200); const s = st(); if (r.id) { const cur = s.receipts.find(x => x.id === r.id); Object.assign(cur, r); return { ...cur }; }
+    const n = { id: ++s.seq, kind: 'receipt', day: ymd(), amount: null, note: null, photo_path: null, created_at: new Date().toISOString(), ...r }; s.receipts.push(n); return { ...n }; },
+  async deleteReceipt(r) { await wait(120); const s = st(); s.receipts = s.receipts.filter(x => x.id !== r.id); },
+  async uploadPhoto(blob) { await wait(400); const path = `demo/${Date.now()}.jpg`; st().photos[path] = URL.createObjectURL(blob); return path; },
+  async photoUrls(paths) { const s = st(); return Object.fromEntries(paths.filter(p => s.photos[p]).map(p => [p, s.photos[p]])); },
+  async supplies() { await wait(100); return st().supplies.filter(x => x.active).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)).map(x => ({ ...x })); },
+  async saveSupply(x) { await wait(150); const s = st(); if (x.id) { const cur = s.supplies.find(y => y.id === x.id); Object.assign(cur, x); return { ...cur }; }
+    const n = { id: ++s.seq, kind: 'Other', on_hand: 0, low_at: 1, unit_price: null, note: null, active: true, ...x }; s.supplies.push(n); return { ...n }; },
+  async logSupply(supply_id, kind, qty = 1, cost = null) { await wait(120); const s = st(); const e = { id: ++s.seq, supply_id, kind, qty, cost, at: new Date().toISOString() }; s.supplyLog.push(e);
+    const x = s.supplies.find(y => y.id === supply_id); x.on_hand = Math.max(0, x.on_hand + (kind === 'bought' ? qty : -qty)); if (kind === 'bought' && cost != null) x.unit_price = Math.round(cost / qty * 100) / 100; return { ...e }; },
+  async undoLog(id) { const s = st(); const e = s.supplyLog.find(y => y.id === id); if (!e) return; s.supplyLog = s.supplyLog.filter(y => y.id !== id);
+    const x = s.supplies.find(y => y.id === e.supply_id); x.on_hand = Math.max(0, x.on_hand - (e.kind === 'bought' ? e.qty : -e.qty)); },
+  async supplyLog(from, to) { await wait(100); return st().supplyLog.filter(e => new Date(e.at) >= from && new Date(e.at) < to).sort((a, b) => new Date(a.at) - new Date(b.at)).map(e => ({ ...e })); },
   supabaseUrl: 'https://YOUR-PROJECT.supabase.co', anonKey: 'YOUR-ANON-KEY'
 };
 

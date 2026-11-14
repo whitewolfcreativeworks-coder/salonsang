@@ -130,6 +130,33 @@ await asRole('authenticated', 'someone@else.com', async () => {
 const freed = await asRole('anon', null, () => q(`select t from public.open_slots(2, '{}', null, 7) t`));
 ok(freed.some(r => r.t.getTime() === new Date(ten.t).getTime()), 'cancelled 10:00 slot is open again');
 
+console.log('\nTaxes + supplies');
+await asRole('authenticated', 'sang@salonsang.com', async () => {
+  await q(`update public.appointments set paid = 52.50 where client_name = 'Mai Tran'`);
+  ok((await q(`select paid from public.appointments where client_name = 'Mai Tran'`))[0].paid == 52.5, 'Sang can record what a client paid');
+  await q(`insert into public.receipts (kind, amount, note, photo_path) values ('receipt', 23.40, 'Sally Beauty: acetone', '2026/a.jpg'), ('note', null, 'Bought a new lamp with cash', null)`);
+  ok((await q('select count(*)::int n from public.receipts'))[0].n === 2, 'Sang adds a receipt and a note');
+  const [sup] = await q(`insert into public.supplies (name, kind) values ('OPI Big Apple Red', 'Polish') returning id`);
+  await q(`insert into public.supply_log (supply_id, kind, qty, cost) values ($1, 'bought', 3, 30)`, [sup.id]);
+  let s1 = (await q('select on_hand, unit_price from public.supplies where id = $1', [sup.id]))[0];
+  ok(s1.on_hand === 3 && +s1.unit_price === 10, 'bought 3 for $30 → 3 on hand, $10 each');
+  const [used] = await q(`insert into public.supply_log (supply_id, kind) values ($1, 'used') returning id`, [sup.id]);
+  ok((await q('select on_hand from public.supplies where id = $1', [sup.id]))[0].on_hand === 2, 'used one up → 2 left');
+  await q('delete from public.supply_log where id = $1', [used.id]);
+  ok((await q('select on_hand from public.supplies where id = $1', [sup.id]))[0].on_hand === 3, 'undo puts it back');
+  for (let i = 0; i < 5; i++) await q(`insert into public.supply_log (supply_id, kind) values ($1, 'used')`, [sup.id]);
+  ok((await q('select on_hand from public.supplies where id = $1', [sup.id]))[0].on_hand === 0, 'never goes below zero');
+});
+await asRole('anon', null, async () => {
+  let blocked = 0;
+  for (const t of ['receipts', 'supplies', 'supply_log']) { try { const r = await q(`select * from public.${t}`); if (!r.length) blocked++; } catch { blocked++; } }
+  ok(blocked === 3, 'the public can\'t see receipts or supplies');
+});
+await asRole('authenticated', 'someone@else.com', async () => {
+  const n = (await q('select (select count(*) from public.receipts) + (select count(*) from public.supplies) n'))[0].n;
+  ok(+n === 0, 'a different logged-in user sees no receipts or supplies');
+});
+
 await db.exec(`select private.tick()`);
 ok(true, 'daily tick runs');
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');

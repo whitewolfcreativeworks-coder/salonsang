@@ -1,5 +1,6 @@
 // Sang's portal: her appointments, open times, texts and settings. What's in here is the truth.
 import { api, isDemo } from './backend.js';
+import { renderTaxes, renderSupplies } from './books.js';
 import { ymd, hm, at, addDays, weekday, fmtTime, fmtDate, relDay, minutes, prettyPhone, normPhone, smsLink } from './lib/time.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -14,6 +15,13 @@ let services = [], settings = null, calDay = ymd();
 
 function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), ms); }
 const fail = e => { console.error(e); toast('😿 ' + (e.message || 'Something went wrong')); };
+function toastUndo(msg, undo) {
+  const t = $('#toast'); t.innerHTML = `${esc(msg)} <button type="button">Undo</button>`; t.classList.add('on');
+  $('button', t).onclick = () => { t.classList.remove('on'); undo().catch(fail); };
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 5000);
+}
+// what the Taxes and Supplies screens (books.js) need from the portal
+const ctx = { A, esc, toast, toastUndo, fail, render: () => render(), openSheet: h => openSheet(h), closeSheet: () => closeSheet(), services: () => services };
 
 // ============================================================ boot + login
 async function boot() {
@@ -62,7 +70,7 @@ async function start() {
     <main class="p-main" id="main"></main>
     <button class="p-fab" id="fab" aria-label="New appointment">＋</button>
     <nav class="p-tabs">
-      ${[['today', '☀️', 'Today'], ['calendar', '🗓️', 'Calendar'], ['hours', '🕘', 'Open times'], ['settings', '⚙️', 'Settings']]
+      ${[['today', '☀️', 'Today'], ['calendar', '🗓️', 'Calendar'], ['hours', '🕘', 'Hours'], ['taxes', '🧾', 'Taxes'], ['supplies', '🧴', 'Supplies'], ['settings', '⚙️', 'Settings']]
         .map(([k, i, l]) => `<button data-view="${k}"><span>${i}</span>${l}</button>`).join('')}
     </nav>
     <div class="p-sheet" id="sheet" hidden><div class="p-sheet-back" data-close></div><div class="p-sheet-card" id="sheetCard"></div></div>`;
@@ -75,14 +83,16 @@ async function start() {
   go(view);
 }
 function go(v) {
-  view = ['today', 'calendar', 'hours', 'settings'].includes(v) ? v : 'today';
+  view = ['today', 'calendar', 'hours', 'taxes', 'supplies', 'settings'].includes(v) ? v : 'today';
+  $('#fab').hidden = view === 'taxes' || view === 'supplies';
   history.replaceState(null, '', '#' + view);
   $$('.p-tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
   render();
 }
 function render() {
   const m = $('#main'); if (!m) return;
-  ({ today: renderToday, calendar: renderCalendar, hours: renderHours, settings: renderSettings })[view](m).catch(fail);
+  ({ today: renderToday, calendar: renderCalendar, hours: renderHours, settings: renderSettings,
+     taxes: x => renderTaxes(x, ctx), supplies: x => renderSupplies(x, ctx) })[view](m).catch(fail);
 }
 const dayRange = d => [at(d), at(addDays(d, 1))];
 
@@ -246,6 +256,7 @@ function editAppt(a, day = ymd()) {
       <details class="p-adds" ${a?.addons?.length ? 'open' : ''}><summary>Add-ons</summary>${adds.map(s => `<label class="p-chk"><input type="checkbox" name="addon" value="${s.id}" data-min="${s.minutes}" ${a?.addons?.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)} <i>${esc(s.price)}</i></span></label>`).join('')}</details>
       <div class="p-row"><label>Day<input type="date" name="day" required value="${a ? ymd(s0) : day}"></label><label>Time<input type="time" name="time" required step="300" value="${a ? hm(s0) : ''}"></label></div>
       <label>Length (minutes)<input type="number" name="len" min="5" max="480" step="5" value="${len}"></label>
+      <label>Paid <small>(optional, for your taxes)</small><input name="paid" inputmode="decimal" placeholder="${esc(curSvc?.price || '$0.00')}" value="${a?.paid != null ? (+a.paid).toFixed(2) : ''}"></label>
       <label>Note<textarea name="note" rows="2" maxlength="500">${esc(a?.note || '')}</textarea></label>
       <label class="p-chk"><input type="checkbox" name="texts_ok" ${a ? (a.texts_ok ? 'checked' : '') : 'checked'}><span>Text reminders for this client</span></label>
       <label class="p-chk"><input type="checkbox" name="confirm" ${isNew ? 'checked' : ''}><span>${isNew ? 'Send a confirmation text' : 'Send a new confirmation if I change the time'}</span></label>
@@ -294,7 +305,8 @@ function editAppt(a, day = ymd()) {
       addons: $$('input[name=addon]:checked', f).map(x => services.find(s => s.id === +x.value).name),
       starts_at: start.toISOString(), ends_at: new Date(start.getTime() + +f.len.value * 60000).toISOString(),
       client_name: f.name.value.trim(), client_phone: phone, note: f.note.value.trim() || null,
-      texts_ok: f.texts_ok.checked, send_confirmation: f.confirm.checked
+      texts_ok: f.texts_ok.checked, send_confirmation: f.confirm.checked,
+      paid: (v => Number.isFinite(v) ? v : null)(parseFloat(f.paid.value.replace(/[^\d.]/g, '')))
     };
     if (a) row.id = a.id; else row.source = 'portal';
     const btn = $('button[type=submit]', f); btn.disabled = true;

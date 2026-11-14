@@ -109,6 +109,46 @@ create table if not exists public.messages (
 );
 create index if not exists msg_due on public.messages (status, send_after);
 
+-- ---------------------------------------------------------------- taxes + supplies (Sang's bookkeeping)
+-- what a client actually paid (optional; the tax summary falls back to the menu price)
+alter table public.appointments add column if not exists paid numeric(10,2) check (paid is null or paid >= 0);
+
+-- receipts (with a photo) and notes, for the tax guy
+create table if not exists public.receipts (
+  id         bigserial primary key,
+  kind       text not null default 'receipt' check (kind in ('receipt','note')),
+  day        date not null default current_date,
+  amount     numeric(10,2) check (amount is null or amount >= 0),
+  note       text check (length(note) <= 4000),
+  photo_path text,                          -- in the private storage bucket 'receipts'
+  created_at timestamptz not null default now()
+);
+create index if not exists receipts_day on public.receipts (day);
+
+-- supplies: polish, gel, dip powder, lotion, tools…
+create table if not exists public.supplies (
+  id         bigserial primary key,
+  name       text not null check (length(name) between 1 and 80),
+  kind       text not null default 'Other',
+  on_hand    int  not null default 0 check (on_hand >= 0),
+  low_at     int  not null default 1 check (low_at >= 0),
+  unit_price numeric(10,2) check (unit_price is null or unit_price >= 0),   -- last price paid for one
+  note       text check (length(note) <= 500),
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
+-- every "bought more" and "used one up", so the portal can tell how fast things go
+create table if not exists public.supply_log (
+  id        bigserial primary key,
+  supply_id bigint not null references public.supplies(id) on delete cascade,
+  kind      text not null check (kind in ('bought','used')),
+  qty       int  not null default 1 check (qty between 1 and 999),
+  cost      numeric(10,2) check (cost is null or cost >= 0),               -- total paid (bought only)
+  at        timestamptz not null default now()
+);
+create index if not exists supply_log_at on public.supply_log (at);
+create index if not exists supply_log_item on public.supply_log (supply_id, at);
+
 -- ---------------------------------------------------------------- helpers
 create or replace function private.is_owner() returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -252,6 +292,25 @@ drop trigger if exists appt_touch on public.appointments;
 create trigger appt_touch before insert or update on public.appointments for each row execute function private.appt_changed();
 drop trigger if exists appt_msgs on public.appointments;
 create trigger appt_msgs after insert or update on public.appointments for each row execute function private.appt_after();
+
+-- supply counts follow the log (bought adds, used takes away, never below zero); remember the last price
+create or replace function private.supply_logged() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    update public.supplies set
+      on_hand = greatest(0, on_hand + case when new.kind = 'bought' then new.qty else -new.qty end),
+      unit_price = case when new.kind = 'bought' and new.cost is not null then round(new.cost / new.qty, 2) else unit_price end
+     where id = new.supply_id;
+  elsif tg_op = 'DELETE' then                     -- undo
+    update public.supplies set
+      on_hand = greatest(0, on_hand - case when old.kind = 'bought' then old.qty else -old.qty end)
+     where id = old.supply_id;
+  end if;
+  return null;
+end $$;
+drop trigger if exists supply_count on public.supply_log;
+create trigger supply_count after insert or delete on public.supply_log for each row execute function private.supply_logged();
 
 -- ---------------------------------------------------------------- PUBLIC API (website)
 create or replace function public.booking_info() returns json
@@ -455,14 +514,27 @@ alter table public.services     enable row level security;
 alter table public.openings     enable row level security;
 alter table public.appointments enable row level security;
 alter table public.messages     enable row level security;
+alter table public.receipts     enable row level security;
+alter table public.supplies     enable row level security;
+alter table public.supply_log   enable row level security;
 
 do $$ declare t text; begin
-  foreach t in array array['settings','services','openings','appointments','messages'] loop
+  foreach t in array array['settings','services','openings','appointments','messages','receipts','supplies','supply_log'] loop
     execute format('drop policy if exists owner_all on public.%I', t);
     execute format('create policy owner_all on public.%I for all to authenticated using (private.is_owner()) with check (private.is_owner())', t);
   end loop;
 end $$;
 -- (the website reads services and slots only through booking_info() / open_slots(), never the tables)
+
+-- receipt photos: a private storage bucket only the owner can read or write (Supabase Storage)
+do $$ begin
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('receipts', 'receipts', false, 10485760, array['image/jpeg','image/png','image/webp','image/heic','application/pdf'])
+    on conflict (id) do nothing;
+  drop policy if exists receipts_owner on storage.objects;
+  create policy receipts_owner on storage.objects for all to authenticated
+    using (bucket_id = 'receipts' and private.is_owner()) with check (bucket_id = 'receipts' and private.is_owner());
+exception when undefined_table or invalid_schema_name then raise notice 'storage not available here: %', sqlerrm; end $$;
 
 grant usage on schema private to authenticated;   -- needed so policies can call private.is_owner()
 revoke all on all tables in schema private from anon, authenticated;
