@@ -3,7 +3,7 @@
   "private": true,
   "description": "salonsang.com: Salon Sang Nail Studio, Eugene OR",
   "scripts": {
-    "build": "rm -rf js/build && esbuild src/app.js src/portal.js --bundle --splitting --format=esm --minify --target=es2020 --outdir=js/build --legal-comments=linked",
+    "build": "rm -rf js/build && esbuild src/app.js src/portal.js --bundle --splitting --format=esm --minify --target=es2020 --outdir=js/build --legal-comments=linked && node tools/stamp.mjs",
     "test:backend": "node backend/test.mjs"
   },
   "dependencies": {

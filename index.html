@@ -49,8 +49,8 @@ setTimeout(function(){var h=document.documentElement;if(h.classList.contains('lo
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Great+Vibes&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="js/vendor/lenis.css">
-<link rel="stylesheet" href="css/style.css">
-<link rel="modulepreload" href="js/build/app.js">
+<link rel="stylesheet" href="css/style.css?v=bac00ef692">
+<link rel="modulepreload" href="js/build/app.js?v=f4c74382bd">
 <link rel="preload" as="image" href="images/neon-room.webp" crossorigin>
 <link rel="preload" as="fetch" href="images/neon-tubes.json" crossorigin>
 <script type="application/ld+json">
@@ -152,11 +152,14 @@ setTimeout(function(){var h=document.documentElement;if(h.classList.contains('lo
     <p class="door-kicker">Downtown Eugene · Sola Salon Studios · Suite 12</p>
     <h1 class="sr-only">Salon Sang Nail Studio, a private nail salon in Eugene, Oregon</h1>
     <p class="door-line">The whole salon.<br><em>Just for you.</em></p>
-    <button class="btn btn-glow" id="lightsOn" type="button">
-      <span class="btn-spark">✦</span> Step inside
-    </button>
+    <div class="door-ctas">
+      <button class="btn btn-glow" id="lightsOn" type="button">
+        <span class="btn-spark">✦</span> Step inside
+      </button>
+      <button class="btn btn-book-door can-book-only" type="button" data-book>✦ Book online</button>
+    </div>
     <p class="door-swirl">Touch the glow ✦ swirl the polish</p>
-    <p class="door-hint">Appointments by call or text · <a href="tel:+15306484977">530-648-4977</a></p>
+    <p class="door-hint">Book online, or call or text · <a href="tel:+15306484977">530-648-4977</a></p>
   </div>
 </header>
 
@@ -478,6 +481,6 @@ setTimeout(function(){var h=document.documentElement;if(h.classList.contains('lo
 <script src="js/vendor/lenis.min.js" defer></script>
 <script src="js/vendor/fluid.js" defer></script>
 <script src="js/main.js" defer></script>
-<script type="module" src="js/build/app.js"></script>
+<script type="module" src="js/build/app.js?v=f4c74382bd"></script>
 </body>
 </html>

@@ -434,3 +434,15 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
   #stage .stage-tip{top:74px}
   .ghost-pop{left:8px;right:8px;bottom:8px}
 }
+/* the door: Book online right next to Step inside */
+.door-ctas{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center}
+.btn-book-door{background:linear-gradient(135deg,var(--pink),#e86a9a);color:#fff;padding:15px 30px;font-size:18px;box-shadow:0 0 26px rgba(214,58,120,.5)}
+.door-ctas .btn{pointer-events:auto}
+/* the bottom bar on small phones: one line each, Book gets the most room */
+.book-bar a{white-space:nowrap}
+@media (max-width:420px){
+  .book-bar{gap:8px;padding-left:10px;padding-right:10px}
+  .book-bar a{padding:13px 6px;font-size:15px}
+  html.can-book .book-bar .bb-call,html.can-book .book-bar .bb-text{flex:.8}
+  html.can-book .book-bar .bb-book{flex:1.3}
+}
