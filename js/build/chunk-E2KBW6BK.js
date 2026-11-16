@@ -1,0 +1,1 @@
+var e="https://elrtyeusiqvkmafrswjc.supabase.co",o="sb_publishable_e0ye3YWe2HAiTmwIvU4W6A_dQIpUmHI",t="America/Los_Angeles",s="5306484977",c=()=>!!(e&&o),r=()=>/[?&]demo\b/.test(location.search);export{e as a,o as b,t as c,s as d,c as e,r as f};
