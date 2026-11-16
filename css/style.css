@@ -446,3 +446,14 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
   html.can-book .book-bar .bb-call,html.can-book .book-bar .bb-text{flex:.8}
   html.can-book .book-bar .bb-book{flex:1.3}
 }
+/* short screens (small phones, phones turned sideways): keep the neon sign clear of the text */
+@media (max-height:700px){
+  .door{min-height:max(100svh,600px)}
+  .door-content{padding-bottom:6vh}
+  .door-kicker{margin-bottom:8px}
+  .door-line{margin-bottom:16px}
+  .door-swirl{display:none}
+  .door-hint{margin-top:12px}
+}
+@media (max-height:500px){ .door{min-height:640px} .door-content{padding-bottom:28px} }
+@media (max-height:500px){ .book-bar{padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom))} .book-bar a{padding:8px 10px;font-size:15px} }
