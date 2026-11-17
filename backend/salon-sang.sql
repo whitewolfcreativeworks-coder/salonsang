@@ -109,6 +109,27 @@ create table if not exists public.messages (
 );
 create index if not exists msg_due on public.messages (status, send_after);
 
+-- ---------------------------------------------------------------- clients (Sang's notes, birthdays, nail photos)
+-- key = the client's phone (+1XXXXXXXXXX), or 'name:<lowercase name>' when there's no number
+create table if not exists public.clients (
+  key        text primary key,
+  name       text not null check (length(name) between 1 and 80),
+  phone      text,
+  notes      text check (length(notes) <= 4000),
+  birthday   date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.client_photos (
+  id         bigserial primary key,
+  client_key text not null,
+  photo_path text not null,                -- in the private storage bucket (folder clients/)
+  note       text check (length(note) <= 500),
+  taken_on   date not null default current_date,
+  created_at timestamptz not null default now()
+);
+create index if not exists client_photos_key on public.client_photos (client_key, taken_on desc);
+
 -- ---------------------------------------------------------------- taxes + supplies (Sang's bookkeeping)
 -- what a client actually paid (optional; the tax summary falls back to the menu price)
 alter table public.appointments add column if not exists paid numeric(10,2) check (paid is null or paid >= 0);
@@ -179,7 +200,7 @@ declare
   today date := (now() at time zone s.tz)::date;
   tm  text := ltrim(to_char(st, 'FMHH12:MI AM'), '0');
   dy  text;
-  svc text := a.service_name || case when cardinality(a.addons) > 0 then ' + ' || array_to_string(a.addons, ', ') else '' end;
+  svc text := a.service_name || case when cardinality(a.addons) > 0 then ' + ' || array_to_string(a.addons, ' + ') else '' end;
 begin
   tm := replace(tm, ':00 ', ' ');
   dy := case when st::date = today then 'today'
@@ -333,8 +354,7 @@ declare
 begin
   if not s.booking_open then return; end if;
   select sum(v.minutes) into mins from public.services v
-   where v.active and v.online and (v.id = p_service or v.id = any (coalesce(p_addons,'{}')))
-     and (v.id = p_service) = not v.is_addon;
+   where v.active and v.online and (v.id = p_service or v.id = any (coalesce(p_addons,'{}')));   -- extra services (e.g. mani + pedi) and add-ons
   if mins is null or not exists (select 1 from public.services where id = p_service and active and online and not is_addon) then return; end if;
   return query select * from private.free_starts(mins, (d0::timestamp at time zone s.tz),
                       ((d0 + least(greatest(p_days,1), 62))::timestamp at time zone s.tz));
@@ -362,8 +382,10 @@ begin
 
   select * into svc from public.services where id = p_service and active and online and not is_addon;
   if not found then raise exception 'Please pick a service.' using errcode = 'P0001'; end if;
-  select array_agg(name order by sort, id), coalesce(sum(minutes),0) into addon_names, mins
-    from public.services where id = any (coalesce(p_addons,'{}')) and active and online and is_addon;
+  -- everything else in the visit: more services (a pedicure with the manicure) and add-ons, back to back
+  if cardinality(coalesce(p_addons,'{}')) > 8 then raise exception 'That is a lot for one visit 💖 Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  select array_agg(name order by is_addon, sort, id), coalesce(sum(minutes),0) into addon_names, mins
+    from public.services where id = any (coalesce(p_addons,'{}')) and id <> svc.id and active and online;
   mins := svc.minutes + coalesce(mins,0);
 
   -- gentle abuse limits
@@ -386,7 +408,7 @@ begin
   local_start := a.starts_at at time zone s.tz;
   perform private.alert('New booking 💅',
     a.client_name || ' · ' || a.service_name ||
-    case when cardinality(a.addons) > 0 then ' + ' || array_to_string(a.addons, ', ') else '' end ||
+    case when cardinality(a.addons) > 0 then ' + ' || array_to_string(a.addons, ' + ') else '' end ||
     E'\n' || to_char(local_start, 'FMDay, FMMon FMDD') || ' at ' || ltrim(to_char(local_start, 'FMHH12:MI AM'), '0') ||
     E'\n' || a.client_phone || coalesce(E'\n“' || a.note || '”', ''));
 
@@ -433,6 +455,25 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- PORTAL helpers (owner only)
+-- every client: from her appointments plus anyone she added by hand, with visits, last and next visit
+create or replace function public.owner_client_list()
+returns table(key text, name text, phone text, visits bigint, last_visit timestamptz, next_visit timestamptz, notes text, birthday date)
+language sql stable security definer set search_path = '' as $$
+  with a as (
+    select coalesce(client_phone, 'name:' || lower(btrim(client_name))) k, client_name, client_phone, starts_at, ends_at, status
+      from public.appointments where private.is_owner()
+  ), g as (
+    select k, (array_agg(client_name order by starts_at desc))[1] nm, max(client_phone) ph,
+           count(*) filter (where status = 'done' or (status = 'booked' and ends_at < now())) v,
+           max(starts_at) filter (where status = 'done' or (status = 'booked' and ends_at < now())) lastv,
+           min(starts_at) filter (where status = 'booked' and starts_at > now()) nextv
+      from a group by k
+  )
+  select coalesce(g.k, c.key), coalesce(c.name, g.nm), coalesce(g.ph, c.phone), coalesce(g.v, 0), g.lastv, g.nextv, c.notes, c.birthday
+    from g full join (select * from public.clients where private.is_owner()) c on c.key = g.k
+   order by lower(coalesce(c.name, g.nm))
+$$;
+
 create or replace function public.owner_setup() returns json
 language plpgsql stable security definer set search_path = '' as $$
 declare c private.config := (select x from private.config x where id = 1);
@@ -517,9 +558,11 @@ alter table public.messages     enable row level security;
 alter table public.receipts     enable row level security;
 alter table public.supplies     enable row level security;
 alter table public.supply_log   enable row level security;
+alter table public.clients      enable row level security;
+alter table public.client_photos enable row level security;
 
 do $$ declare t text; begin
-  foreach t in array array['settings','services','openings','appointments','messages','receipts','supplies','supply_log'] loop
+  foreach t in array array['settings','services','openings','appointments','messages','receipts','supplies','supply_log','clients','client_photos'] loop
     execute format('drop policy if exists owner_all on public.%I', t);
     execute format('create policy owner_all on public.%I for all to authenticated using (private.is_owner()) with check (private.is_owner())', t);
   end loop;
@@ -541,8 +584,8 @@ revoke all on all tables in schema private from anon, authenticated;
 revoke execute on all functions in schema private from public, anon;
 grant execute on function private.is_owner() to authenticated;
 
-revoke execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text) from public, anon;
-grant  execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text) to authenticated;
+revoke execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() from public, anon;
+grant  execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() to authenticated;
 grant  execute on function public.booking_info(), public.open_slots(int, int[], date, int),
                            public.book(int, timestamptz, text, text, text, boolean, int[]),
                            public.phone_outbox(text), public.phone_sent(text, bigint), public.is_owner() to anon, authenticated;
@@ -580,7 +623,8 @@ insert into public.services (id, category, name, price, minutes, is_addon, onlin
   (29, 'Add-on',   'Callus Removal',        '+$10', 10, true, true, 72),
   (30, 'Add-on',   'Take Off Gel',          '$10', 10, true, true, 73),
   (31, 'Add-on',   'Take Off Dip, Hard Gel or Builder', '$15', 20, true, true, 74),
-  (32, 'Add-on',   'Nail Repair',           '$5 each', 5, true, true, 75)
+  (32, 'Add-on',   'Nail Repair',           '$5 each', 5, true, true, 75),
+  (33, 'Add-on',   'Specialty nail art design', 'priced by design', 30, true, true, 76)
 on conflict (id) do nothing;
 select setval(pg_get_serial_sequence('public.services','id'), greatest((select max(id) from public.services), 1));
 

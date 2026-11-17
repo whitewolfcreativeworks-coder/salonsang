@@ -10,7 +10,7 @@ const kindIcon = k => (KINDS.find(x => x[0] === k) || KINDS[5])[1];
 const DAY = 86400e3;
 
 // shrink a phone photo before uploading (keeps the free storage roomy, still sharp enough to read)
-async function shrink(file) {
+export async function shrink(file) {
   try {
     const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
     const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
@@ -19,7 +19,7 @@ async function shrink(file) {
     return await new Promise(r => c.toBlob(b => r(b || file), 'image/jpeg', 0.82));
   } catch { return file; }
 }
-const pickPhoto = () => new Promise(res => {
+export const pickPhoto = () => new Promise(res => {
   const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*';
   i.onchange = () => res(i.files[0] || null); i.click();
 });
@@ -183,7 +183,7 @@ async function report(ctx, y) {
         : '<p class="b-small">None.</p>'}
       <h2 class="b-break">All visits</h2>
       <table class="b-visits"><thead><tr><th>Date</th><th>Client</th><th>Service</th><th>Amount</th></tr></thead><tbody>
-        ${d.visits.map(v => `<tr><td>${fmtDate(ymd(new Date(v.starts_at)))}</td><td>${esc(v.client_name)}</td><td>${esc(v.service_name + (v.addons?.length ? ' + ' + v.addons.join(', ') : ''))}</td><td>${money(v.amt)}${v.est ? '*' : ''}</td></tr>`).join('')}</tbody></table>
+        ${d.visits.map(v => `<tr><td>${fmtDate(ymd(new Date(v.starts_at)))}</td><td>${esc(v.client_name)}</td><td>${esc(v.service_name + (v.addons?.length ? ' + ' + v.addons.join(' + ') : ''))}</td><td>${money(v.amt)}${v.est ? '*' : ''}</td></tr>`).join('')}</tbody></table>
     </article>`;
   document.body.appendChild(el); document.body.classList.add('b-printing');
   const close = () => { el.remove(); document.body.classList.remove('b-printing'); };

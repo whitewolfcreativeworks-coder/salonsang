@@ -42,7 +42,7 @@ await db.exec(`
 console.log('\nWebsite (anon)');
 await asRole('anon', null, async () => {
   const info = (await q('select public.booking_info() j'))[0].j;
-  ok(info.open && info.services.length === 32, `booking_info lists ${info.services.length} services`);
+  ok(info.open && info.services.length === 33, `booking_info lists ${info.services.length} services`);
   let denied = false; try { await q('select * from public.appointments'); } catch { denied = true; }
   const rows = denied ? [] : await q('select * from public.appointments');
   ok(rows.length === 0, 'anon cannot read appointments');
@@ -155,6 +155,32 @@ await asRole('anon', null, async () => {
 await asRole('authenticated', 'someone@else.com', async () => {
   const n = (await q('select (select count(*) from public.receipts) + (select count(*) from public.supplies) n'))[0].n;
   ok(+n === 0, 'a different logged-in user sees no receipts or supplies');
+});
+
+console.log('\nMore than one service (mani + pedi)');
+const combo = await asRole('anon', null, async () => {
+  const slots = await q(`select t from public.open_slots(2, '{7,29}', null, 7) t`);
+  ok(slots.length > 0, 'open times for Gel Manicure + Spa Pedicure + Callus Removal');
+  return (await q(`select public.book(2, $1, 'Ana Lopez', '541-555-0190', null, true, '{7,29}') j`, [slots[0].t]))[0].j;
+});
+ok(JSON.stringify(combo.addons) === JSON.stringify(['Spa Pedicure', 'Callus Removal']), 'booked: ' + combo.service + ' + ' + combo.addons.join(', '));
+ok((new Date(combo.ends_at) - new Date(combo.starts_at)) / 60000 === 60 + 60 + 10, 'one visit, back to back: 130 minutes');
+
+console.log('\nClients');
+await asRole('authenticated', 'sang@salonsang.com', async () => {
+  await q(`insert into public.clients (key, name, phone, notes, birthday) values ('+15415550111', 'Mai Tran', '+15415550111', 'Loves almond, nude chrome', '1990-03-14'), ('name:kim', 'Kim', null, 'New, called the salon', null)`);
+  await q(`insert into public.client_photos (client_key, photo_path) values ('+15415550111', 'clients/a.jpg')`);
+  const list = await q(`select * from public.owner_client_list()`);
+  const mai = list.find(c => c.key === '+15415550111'), kim = list.find(c => c.key === 'name:kim'), ana = list.find(c => c.name === 'Ana Lopez');
+  ok(mai && mai.notes === 'Loves almond, nude chrome', 'client list joins notes to visits');
+  ok(kim && +kim.visits === 0, 'clients she adds by hand show up too');
+  ok(ana && ana.next_visit, 'next visit shows for an upcoming client');
+});
+let denied = false;
+try { await asRole('anon', null, () => q(`select * from public.owner_client_list()`)); } catch { denied = true; }
+ok(denied, 'the public can\'t read the client list');
+await asRole('authenticated', 'someone@else.com', async () => {
+  ok((await q('select count(*)::int n from public.owner_client_list()'))[0].n === 0 && (await q('select count(*)::int n from public.clients'))[0].n === 0, 'a different logged-in user sees no clients');
 });
 
 await db.exec(`select private.tick()`);

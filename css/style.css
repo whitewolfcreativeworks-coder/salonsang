@@ -457,3 +457,9 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
 }
 @media (max-height:500px){ .door{min-height:640px} .door-content{padding-bottom:28px} }
 @media (max-height:500px){ .book-bar{padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom))} .book-bar a{padding:8px 10px;font-size:15px} }
+/* booking: more than one service in a visit */
+.bk-visit{background:#fff7fa;border:1.5px solid var(--pink-soft);border-radius:18px;padding:4px 14px 12px;margin-bottom:12px}
+.bk-visit .bk-label{display:flex;justify-content:space-between;gap:8px;margin-top:10px}
+.bk-visit .bk-label span{font-weight:600;color:var(--pink-deep);font-size:14px}
+.bk-tip{font-size:13px;color:var(--ink-soft);margin:10px 2px 0}
+.bk-svc .m b{font-weight:600}.bk-added{color:var(--pink-deep)}.bk-addit{color:var(--pink)}

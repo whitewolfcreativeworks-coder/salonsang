@@ -1,6 +1,7 @@
 // Sang's portal: her appointments, open times, texts and settings. What's in here is the truth.
 import { api, isDemo } from './backend.js';
 import { renderTaxes, renderSupplies } from './books.js';
+import { renderClients } from './clients.js';
 import { ymd, hm, at, addDays, weekday, fmtTime, fmtDate, relDay, minutes, prettyPhone, normPhone, smsLink } from './lib/time.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -21,7 +22,7 @@ function toastUndo(msg, undo) {
   clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 5000);
 }
 // what the Taxes and Supplies screens (books.js) need from the portal
-const ctx = { A, esc, toast, toastUndo, fail, render: () => render(), openSheet: h => openSheet(h), closeSheet: () => closeSheet(), services: () => services };
+const ctx = { A, esc, toast, toastUndo, fail, render: () => render(), openSheet: h => openSheet(h), closeSheet: () => closeSheet(), services: () => services, newAppt: pre => editAppt(null, ymd(), pre) };
 
 // ============================================================ boot + login
 async function boot() {
@@ -70,7 +71,7 @@ async function start() {
     <main class="p-main" id="main"></main>
     <button class="p-fab" id="fab" aria-label="New appointment">＋</button>
     <nav class="p-tabs">
-      ${[['today', '☀️', 'Today'], ['calendar', '🗓️', 'Calendar'], ['hours', '🕘', 'Hours'], ['taxes', '🧾', 'Taxes'], ['supplies', '🧴', 'Supplies'], ['settings', '⚙️', 'Settings']]
+      ${[['today', '☀️', 'Today'], ['calendar', '🗓️', 'Calendar'], ['clients', '💖', 'Clients'], ['taxes', '🧾', 'Taxes'], ['supplies', '🧴', 'Supplies'], ['settings', '⚙️', 'Settings']]
         .map(([k, i, l]) => `<button data-view="${k}"><span>${i}</span>${l}</button>`).join('')}
     </nav>
     <div class="p-sheet" id="sheet" hidden><div class="p-sheet-back" data-close></div><div class="p-sheet-card" id="sheetCard"></div></div>`;
@@ -83,16 +84,16 @@ async function start() {
   go(view);
 }
 function go(v) {
-  view = ['today', 'calendar', 'hours', 'taxes', 'supplies', 'settings'].includes(v) ? v : 'today';
+  view = ['today', 'calendar', 'clients', 'hours', 'taxes', 'supplies', 'settings'].includes(v) ? v : 'today';
   $('#fab').hidden = view === 'taxes' || view === 'supplies';
   history.replaceState(null, '', '#' + view);
-  $$('.p-tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+  $$('.p-tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === (view === 'hours' ? 'settings' : view)));
   render();
 }
 function render() {
   const m = $('#main'); if (!m) return;
   ({ today: renderToday, calendar: renderCalendar, hours: renderHours, settings: renderSettings,
-     taxes: x => renderTaxes(x, ctx), supplies: x => renderSupplies(x, ctx) })[view](m).catch(fail);
+     taxes: x => renderTaxes(x, ctx), supplies: x => renderSupplies(x, ctx), clients: x => renderClients(x, ctx) })[view](m).catch(fail);
 }
 const dayRange = d => [at(d), at(addDays(d, 1))];
 
@@ -121,7 +122,7 @@ async function renderToday(m) {
 }
 function apptCard(a, showDay = false) {
   const s = new Date(a.starts_at), e = new Date(a.ends_at);
-  const what = a.service_name + (a.addons?.length ? ' + ' + a.addons.join(', ') : '');
+  const what = a.service_name + (a.addons?.length ? ' + ' + a.addons.join(' + ') : '');
   return `
     <article class="p-appt ${a.status}" data-appt="${a.id}" tabindex="0">
       <div class="p-when"><b>${fmtTime(s)}</b><span>${showDay ? esc(relDay(ymd(s))) : fmtTime(e)}</span></div>
@@ -193,6 +194,7 @@ async function renderHours(m) {
   const from = hoursPrefill || t;
   const singleDay = !!hoursPrefill; hoursPrefill = null;
   m.innerHTML = `
+    <button class="p-link p-back" type="button" id="toSettings">← Settings</button>
     <header class="p-hello"><h1><span class="script">Open times</span></h1><p class="p-sub">Clients can only book online inside the times you open here.</p></header>
     <form class="p-card p-form" id="openForm">
       <div class="p-row"><label>From<input type="time" name="from" value="09:30" step="900" required></label><label>Until<input type="time" name="to" value="${settingsCloseGuess(from)}" step="900" required></label></div>
@@ -207,6 +209,7 @@ async function renderHours(m) {
       <div class="p-oday"><div><b>${esc(relDay(d))}</b>${relDay(d).startsWith('To') ? ` · ${fmtDate(d, { month: 'short', day: 'numeric' })}` : ''}${booked[d] ? ` <i>${booked[d]} booked</i>` : ''}</div>
         ${byDay[d].map(o => `<div class="p-orow">${fmtTime(o.starts_at)} – ${fmtTime(o.ends_at)}<button class="p-x" data-del="${o.id}" aria-label="Remove">×</button></div>`).join('')}</div>`).join('') || '<p class="p-hint">Nothing open yet. Add your hours above 💖</p>'}</section>`;
   const f = $('#openForm', m);
+  $('#toSettings', m).onclick = () => go('settings');
   const plan = () => {
     const days = $$('input[name=wd]:checked', f).map(x => +x.value), out = [];
     for (let i = 0; i < +f.weeks.value * 7; i++) {
@@ -237,23 +240,28 @@ function settingsCloseGuess(d) { const mth = +d.slice(5, 7); return mth >= 4 && 
 function openSheet(html) { $('#sheetCard').innerHTML = html; $('#sheet').hidden = false; requestAnimationFrame(() => $('#sheet').classList.add('in')); }
 function closeSheet() { $('#sheet').classList.remove('in'); setTimeout(() => { $('#sheet').hidden = true; }, 250); }
 
-function editAppt(a, day = ymd()) {
+function editAppt(a, day = ymd(), pre = null) {
   const isNew = !a;
+  const src = a || pre;                                  // pre: "Book again" fills in the client and their usual services
   const main = services.filter(s => !s.is_addon && s.active), adds = services.filter(s => s.is_addon && s.active);
   const cats = [...new Set(main.map(s => s.category))];
   const s0 = a ? new Date(a.starts_at) : null;
-  const curSvc = a ? (services.find(s => s.id === a.service_id) || services.find(s => s.name === a.service_name)) : null;
+  const curSvc = src ? (services.find(s => s.id === src.service_id) || services.find(s => s.name === src.service_name)) : null;
+  // more services in the same visit (a pedicure with the manicure) live in addons, next to the add-ons
+  let extras = (src?.addons || []).filter(n => !adds.some(x => x.name === n));
   const len = a ? Math.round((new Date(a.ends_at) - new Date(a.starts_at)) / 60000) : 60;
   openSheet(`
     <header class="p-sheet-head"><button class="p-x big" data-close aria-label="Close">×</button>
       <h2>${isNew ? '<span class="script">New</span> appointment' : esc(a.client_name)}</h2>
       ${a ? `<p class="p-sub">${esc(relDay(ymd(s0)))} at ${fmtTime(s0)}${a.source === 'web' ? ' · booked online' : ''}</p>` : ''}</header>
     <form class="p-form" id="apptForm" autocomplete="off">
-      <label class="p-ac">Client<input name="name" required value="${esc(a?.client_name || '')}" placeholder="Name"><div class="p-sugg" id="sugg"></div></label>
-      <label>Mobile<input name="phone" type="tel" inputmode="tel" value="${esc(prettyPhone(a?.client_phone))}" placeholder="(541) 555-0123"></label>
+      <label class="p-ac">Client<input name="name" required value="${esc(src?.client_name || '')}" placeholder="Name"><div class="p-sugg" id="sugg"></div></label>
+      <label>Mobile<input name="phone" type="tel" inputmode="tel" value="${esc(prettyPhone(src?.client_phone))}" placeholder="(541) 555-0123"></label>
       <label>Service<select name="service">${cats.map(c => `<optgroup label="${esc(c)}">${main.filter(s => s.category === c).map(s => `<option value="${s.id}" data-min="${s.minutes}" ${curSvc?.id === s.id ? 'selected' : ''}>${esc(s.name)} · ${esc(s.price)}</option>`).join('')}</optgroup>`).join('')}
         ${a && !curSvc ? `<option value="" selected>${esc(a.service_name)}</option>` : ''}</select></label>
-      <details class="p-adds" ${a?.addons?.length ? 'open' : ''}><summary>Add-ons</summary>${adds.map(s => `<label class="p-chk"><input type="checkbox" name="addon" value="${s.id}" data-min="${s.minutes}" ${a?.addons?.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)} <i>${esc(s.price)}</i></span></label>`).join('')}</details>
+      <div class="p-extras" id="extras"></div>
+      <label>＋ Add another service <small>(same visit, back to back)</small><select id="more"><option value="">Choose…</option>${cats.map(c => `<optgroup label="${esc(c)}">${main.filter(s => s.category === c).map(s => `<option value="${s.id}">${esc(s.name)} · ${esc(s.price)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <details class="p-adds" ${src?.addons?.some(n => adds.some(x => x.name === n)) ? 'open' : ''}><summary>Add-ons</summary>${adds.map(s => `<label class="p-chk"><input type="checkbox" name="addon" value="${s.id}" data-min="${s.minutes}" ${src?.addons?.includes(s.name) ? 'checked' : ''}><span>${esc(s.name)} <i>${esc(s.price)}</i></span></label>`).join('')}</details>
       <div class="p-row"><label>Day<input type="date" name="day" required value="${a ? ymd(s0) : day}"></label><label>Time<input type="time" name="time" required step="300" value="${a ? hm(s0) : ''}"></label></div>
       <label>Length (minutes)<input type="number" name="len" min="5" max="480" step="5" value="${len}"></label>
       <label>Paid <small>(optional, for your taxes)</small><input name="paid" inputmode="decimal" placeholder="${esc(curSvc?.price || '$0.00')}" value="${a?.paid != null ? (+a.paid).toFixed(2) : ''}"></label>
@@ -270,10 +278,18 @@ function editAppt(a, day = ymd()) {
   const f = $('#apptForm');
   const recalc = () => {
     const base = +(f.service.selectedOptions[0]?.dataset.min || len);
-    const extra = $$('input[name=addon]:checked', f).reduce((s, x) => s + +x.dataset.min, 0);
+    const extra = $$('input[name=addon]:checked', f).reduce((s, x) => s + +x.dataset.min, 0)
+      + extras.reduce((s, n) => s + (services.find(x => x.name === n)?.minutes || 0), 0);
     f.len.value = base + extra;
   };
+  const drawExtras = () => {
+    $('#extras').innerHTML = extras.map((n, i) => `<span class="p-xchip">＋ ${esc(n)}<button type="button" data-xrm="${i}" aria-label="Remove ${esc(n)}">×</button></span>`).join('');
+    $$('[data-xrm]', f).forEach(b => b.onclick = () => { extras.splice(+b.dataset.xrm, 1); drawExtras(); recalc(); });
+  };
+  drawExtras();
+  $('#more').onchange = e => { const v = services.find(x => x.id === +e.target.value); e.target.value = ''; if (v && !extras.includes(v.name)) { extras.push(v.name); drawExtras(); recalc(); } };
   f.service.onchange = recalc; $$('input[name=addon]', f).forEach(x => x.onchange = recalc);
+  if (isNew && pre) recalc();
   // returning clients
   let tmr; f.name.oninput = () => { clearTimeout(tmr); tmr = setTimeout(async () => {
     const q = f.name.value.trim(); const box = $('#sugg');
@@ -302,7 +318,7 @@ function editAppt(a, day = ymd()) {
     const svc = services.find(s => s.id === +f.service.value);
     const row = {
       service_id: svc?.id ?? a?.service_id ?? null, service_name: svc?.name || a?.service_name || 'Appointment',
-      addons: $$('input[name=addon]:checked', f).map(x => services.find(s => s.id === +x.value).name),
+      addons: [...extras, ...$$('input[name=addon]:checked', f).map(x => services.find(s => s.id === +x.value).name)],
       starts_at: start.toISOString(), ends_at: new Date(start.getTime() + +f.len.value * 60000).toISOString(),
       client_name: f.name.value.trim(), client_phone: phone, note: f.note.value.trim() || null,
       texts_ok: f.texts_ok.checked, send_confirmation: f.confirm.checked,
@@ -327,6 +343,7 @@ async function renderSettings(m) {
   const sb = A().supabaseUrl;
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Settings</span></h1></header>
+    <button class="b-big" id="toHours" type="button"><span>🕘</span>Open times<small class="b-big-sub">when clients can book online</small></button>
     <form class="p-card p-form" id="setForm">
       <label class="p-chk big"><input type="checkbox" name="booking_open" ${s.booking_open ? 'checked' : ''}><span><b>Online booking is on</b><br><small>Turn off to pause website bookings (vacation, busy week)</small></span></label>
       <h3>Reminder texts</h3>
@@ -363,6 +380,7 @@ async function renderSettings(m) {
     </section>
     <button class="p-btn p-btn-soft" id="signout">Sign out</button>`;
   const f = $('#setForm', m);
+  $('#toHours', m).onclick = () => go('hours');
   const prevAll = async () => { for (const p of $$('[data-prev]', m)) {
     const k = p.dataset.prev; const sample = k === 'reminder_template_pm' ? at(addDays(ymd(), 0), '14:30') : at(addDays(ymd(), k === 'confirm_template' ? 1 : 0), '10:00');
     try { p.textContent = await A().templatePreview(f[k].value, sample); } catch { p.textContent = ''; } } };

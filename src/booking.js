@@ -63,23 +63,46 @@ function close() {
 const body = html => { $('.bk-body', sheet).innerHTML = html; $('.bk-body', sheet).scrollTop = 0; };
 function steps(n) { sheet.querySelectorAll('.bk-steps li').forEach(li => { li.classList.toggle('on', +li.dataset.s === n); li.classList.toggle('done', +li.dataset.s < n); }); }
 
-// ---------- 1. service
+// ---------- 1. service (one or more: a manicure and a pedicure in one visit, back to back)
+const priceNum = t => { const m = String(t || '').match(/\d+(\.\d+)?/); return m ? +m[0] : 0; };
+function visitList() { return [state.service, ...state.addons.map(id => info.services.find(s => s.id === id))].filter(Boolean); }
 function renderService() {
   steps(1);
   const main = info.services.filter(s => !s.addon), adds = info.services.filter(s => s.addon);
   const cats = CAT_ORDER.filter(c => main.some(s => s.category === c));
+  const picked = visitList(), mins = picked.reduce((a, s) => a + s.minutes, 0);
+  const plus = picked.some(s => /\+/.test(String(s.price).replace(/^\+/, '')));
+  const total = picked.reduce((a, s) => a + priceNum(s.price), 0);
+  const inVisit = id => state.service?.id === id || state.addons.includes(id);
   body(`
+    ${state.service ? `<div class="bk-visit"><p class="bk-label">Your visit <span>${minutes(mins)} · ${plus ? 'from ' : ''}$${total}</span></p>
+      <div class="bk-chips">${picked.map(s => `<button type="button" class="bk-chip on" data-rm="${s.id}" aria-label="Remove ${esc(s.name)}">${esc(s.name)} <b>×</b></button>`).join('')}</div>
+      <p class="bk-tip">Want both? Tap another service, like a pedicure with your manicure, to add it to the same visit ✨ Sang does them back to back.</p></div>` : ''}
     <div class="bk-cats" role="tablist">${cats.map(c => `<button type="button" role="tab" data-cat="${esc(c)}" aria-selected="${c === state.cat}">${esc(c)}</button>`).join('')}</div>
     <div class="bk-list">${main.filter(s => s.category === state.cat).map(s => `
-      <button type="button" class="bk-svc${state.service?.id === s.id ? ' on' : ''}" data-svc="${s.id}">
-        <span class="n">${esc(s.name)}</span><span class="m">${minutes(s.minutes)}</span><span class="p">${esc(s.price)}</span>
+      <button type="button" class="bk-svc${inVisit(s.id) ? ' on' : ''}" data-svc="${s.id}">
+        <span class="n">${esc(s.name)}</span><span class="m">${minutes(s.minutes)}${inVisit(s.id) ? ' · <b class="bk-added">✓ in your visit</b>' : state.service ? ' · <b class="bk-addit">＋ add to visit</b>' : ''}</span><span class="p">${esc(s.price)}</span>
       </button>`).join('')}</div>
     ${state.service && adds.length ? `<div class="bk-adds"><p class="bk-label">Add a little extra? <span>optional</span></p>
       <div class="bk-chips">${adds.map(a => `<button type="button" class="bk-chip${state.addons.includes(a.id) ? ' on' : ''}" data-add="${a.id}" aria-pressed="${state.addons.includes(a.id)}">${esc(a.name)} <b>${esc(a.price)}</b></button>`).join('')}</div></div>` : ''}
     <div class="bk-foot"><button type="button" class="btn btn-pink bk-next" ${state.service ? '' : 'disabled'}>Pick a time →</button></div>`);
   const b = $('.bk-body', sheet);
+  const remove = id => {
+    if (state.service?.id === id) {                                   // the first service goes: the next one moves up
+      const next = state.addons.map(i => info.services.find(s => s.id === i)).find(s => s && !s.addon);
+      state.service = next || null; state.addons = next ? state.addons.filter(i => i !== next.id) : [];
+    } else state.addons = state.addons.filter(i => i !== id);
+    state.slots = null; renderService();
+  };
   b.querySelectorAll('[data-cat]').forEach(x => x.onclick = () => { state.cat = x.dataset.cat; renderService(); });
-  b.querySelectorAll('[data-svc]').forEach(x => x.onclick = () => { state.service = info.services.find(s => s.id === +x.dataset.svc); state.slots = null; renderService(); });
+  b.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => remove(+x.dataset.rm));
+  b.querySelectorAll('[data-svc]').forEach(x => x.onclick = () => {
+    const id = +x.dataset.svc;
+    if (inVisit(id)) return remove(id);
+    if (!state.service) state.service = info.services.find(s => s.id === id);
+    else if (state.addons.length < 6) state.addons = [...state.addons, id];
+    state.slots = null; renderService();
+  });
   b.querySelectorAll('[data-add]').forEach(x => x.onclick = () => {
     const id = +x.dataset.add; state.addons = state.addons.includes(id) ? state.addons.filter(i => i !== id) : [...state.addons, id]; state.slots = null; renderService();
   });
@@ -100,7 +123,7 @@ async function renderTime() {
   if (!state.day || !byDay[state.day]) state.day = days.find(d => byDay[d]) || null;
   const total = minutes(state.service.minutes + info.services.filter(s => state.addons.includes(s.id)).reduce((a, s) => a + s.minutes, 0));
   body(`
-    <p class="bk-pick"><b>${esc(state.service.name)}</b>${state.addons.length ? ' + ' + state.addons.map(id => esc(info.services.find(s => s.id === id).name)).join(', ') : ''} · ${total}</p>
+    <p class="bk-pick"><b>${esc(state.service.name)}</b>${state.addons.length ? ' + ' + state.addons.map(id => esc(info.services.find(s => s.id === id).name)).join(' + ') : ''} · ${total}</p>
     ${state.day ? `
     <div class="bk-days" data-lenis-prevent>${days.map(d => `
       <button type="button" class="bk-day${d === state.day ? ' on' : ''}" data-day="${d}" ${byDay[d] ? '' : 'disabled'}>
@@ -124,7 +147,7 @@ function renderYou(err) {
   steps(3);
   const f = state.form || { name: '', phone: '', note: '', textsOk: true };
   body(`
-    <div class="bk-summary"><b>${esc(state.service.name)}</b>${state.addons.length ? ' + ' + state.addons.map(id => esc(info.services.find(s => s.id === id).name)).join(', ') : ''}
+    <div class="bk-summary"><b>${esc(state.service.name)}</b>${state.addons.length ? ' + ' + state.addons.map(id => esc(info.services.find(s => s.id === id).name)).join(' + ') : ''}
       <span>${esc(relDay(ymd(state.time)))} at ${fmtTime(state.time)}</span></div>
     <form class="bk-form" novalidate>
       <label>Your name<input name="name" autocomplete="name" required maxlength="60" value="${esc(f.name)}"></label>
@@ -159,7 +182,7 @@ function done(r, v) {
   steps(4);
   const start = new Date(r.starts_at), end = new Date(r.ends_at);
   const first = v.name.trim().split(' ')[0];
-  const what = r.service + (r.addons?.length ? ' + ' + r.addons.join(', ') : '');
+  const what = r.service + (r.addons?.length ? ' + ' + r.addons.join(' + ') : '');
   body(`
     <div class="bk-done">
       <div class="bk-heart" aria-hidden="true">💅</div>

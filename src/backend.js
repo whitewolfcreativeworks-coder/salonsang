@@ -66,8 +66,8 @@ const Live = {
   async receipts(fromDay, toDay) { return unwrap(await (await sb()).from('receipts').select('*').gte('day', fromDay).lt('day', toDay).order('day', { ascending: false }).order('id', { ascending: false })); },
   async saveReceipt(r) { const c = await sb(); const { id, ...rest } = r; return unwrap(id ? await c.from('receipts').update(rest).eq('id', id).select().single() : await c.from('receipts').insert(rest).select().single()); },
   async deleteReceipt(r) { const c = await sb(); unwrap(await c.from('receipts').delete().eq('id', r.id)); if (r.photo_path) await c.storage.from('receipts').remove([r.photo_path]); },
-  async uploadPhoto(blob) {
-    const path = `${new Date().getFullYear()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${/png/.test(blob.type) ? 'png' : /heic/.test(blob.type) ? 'heic' : 'jpg'}`;
+  async uploadPhoto(blob, folder = '') {
+    const path = `${folder ? folder + '/' : ''}${new Date().getFullYear()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${/png/.test(blob.type) ? 'png' : /heic/.test(blob.type) ? 'heic' : 'jpg'}`;
     unwrap(await (await sb()).storage.from('receipts').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false })); return path;
   },
   async photoUrls(paths) {
@@ -75,6 +75,17 @@ const Live = {
     const r = unwrap(await (await sb()).storage.from('receipts').createSignedUrls(paths, 3600));
     return Object.fromEntries(r.filter(x => x.signedUrl).map(x => [x.path, x.signedUrl]));
   },
+  // ---- portal: clients
+  async clientList() { return unwrap(await (await sb()).rpc('owner_client_list')); },
+  async clientHistory(c) {
+    let q = (await sb()).from('appointments').select('*').order('starts_at', { ascending: false }).limit(300);
+    q = c.phone ? q.eq('client_phone', c.phone) : q.ilike('client_name', c.name);
+    return unwrap(await q);
+  },
+  async saveClient(c) { return unwrap(await (await sb()).from('clients').upsert({ ...c, updated_at: new Date().toISOString() }, { onConflict: 'key' }).select().single()); },
+  async clientPhotos(key) { return unwrap(await (await sb()).from('client_photos').select('*').eq('client_key', key).order('taken_on', { ascending: false }).order('id', { ascending: false })); },
+  async addClientPhoto(key, blob) { const path = await this.uploadPhoto(blob, 'clients'); return unwrap(await (await sb()).from('client_photos').insert({ client_key: key, photo_path: path }).select().single()); },
+  async deleteClientPhoto(ph) { const c = await sb(); unwrap(await c.from('client_photos').delete().eq('id', ph.id)); await c.storage.from('receipts').remove([ph.photo_path]); },
   // ---- portal: supplies
   async supplies() { return unwrap(await (await sb()).from('supplies').select('*').eq('active', true).order('kind').order('name')); },
   async saveSupply(x) { const c = await sb(); const { id, ...rest } = x; return unwrap(id ? await c.from('supplies').update(rest).eq('id', id).select().single() : await c.from('supplies').insert(rest).select().single()); },
@@ -95,7 +106,7 @@ const SERVICES = [
   [20, 'Overlay', 'Dip Powder overlay', '$55', 75], [21, 'Overlay', 'Hard Gel overlay', '$55', 75], [22, 'Overlay', 'Builder Gel overlay', '$55', 75],
   [23, 'Extras', 'Polish Change', '$20', 20], [24, 'Extras', 'Gel Polish Change', '$30', 30], [25, 'Extras', 'Nail Trim', '$15', 15], [26, 'Extras', 'Toenail Trim', '$20', 20],
   [27, 'Add-on', 'French Tip', '+$5', 10], [28, 'Add-on', 'French Tip Gel', '+$10', 15], [29, 'Add-on', 'Callus Removal', '+$10', 10],
-  [30, 'Add-on', 'Take Off Gel', '$10', 10], [31, 'Add-on', 'Take Off Dip, Hard Gel or Builder', '$15', 20], [32, 'Add-on', 'Nail Repair', '$5 each', 5]
+  [30, 'Add-on', 'Take Off Gel', '$10', 10], [31, 'Add-on', 'Take Off Dip, Hard Gel or Builder', '$15', 20], [32, 'Add-on', 'Nail Repair', '$5 each', 5], [33, 'Add-on', 'Specialty nail art design', 'priced by design', 30]
 ].map(([id, category, name, price, minutes], i) => ({ id, category, name, price, minutes, is_addon: category === 'Add-on', online: true, active: true, sort: i }));
 
 function demoState() {
@@ -106,13 +117,16 @@ function demoState() {
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
       reminder_template_pm: "Hi {first}! ✨ Just a sweet reminder: your {service} with Sang is today at {time}. Salon Sang · Sola Salon Studios, Suite 12. See you soon! 💅 Need to change it? Reply or call 530-648-4977 💖" },
     services: SERVICES.map(x => ({ ...x })), openings: [], appointments: [], messages: [], seq: 100,
-    receipts: [], supplies: [], supplyLog: [], photos: {}
+    receipts: [], supplies: [], supplyLog: [], photos: {}, clients: [], clientPhotos: []
   };
   // pretend bookkeeping: a few past visits, supplies with some history, a receipt and a note
-  const past = [['Mai Tran', 'Premier Gel Pedicure', 80], ['Jessica Rivera', 'Gel Manicure', 45], ['Linh Nguyen', 'Dipping full set', null], ['Brooke Adams', 'Spa Pedicure', 50]];
-  for (let i = 1; i <= 40; i++) { const [n, svc, paid] = past[i % 4]; const d = addDays(today, -i * 2);
+  const past = [['Mai Tran', 'Premier Gel Pedicure', 80, '+15415550111'], ['Jessica Rivera', 'Gel Manicure', 45, '+15415550142'], ['Linh Nguyen', 'Dipping full set', null, '+15415550133'], ['Brooke Adams', 'Spa Pedicure', 50, '+15415550178']];
+  for (let i = 1; i <= 40; i++) { const [n, svc, paid, ph] = past[i % 4]; const d = addDays(today, -i * 2);
     s.appointments.push({ id: ++s.seq, service_id: null, service_name: svc, addons: [], starts_at: at(d, '11:00').toISOString(), ends_at: at(d, '12:00').toISOString(),
-      client_name: n, client_phone: null, note: null, source: 'portal', status: 'done', texts_ok: false, send_confirmation: false, paid, created_at: new Date().toISOString() }); }
+      client_name: n, client_phone: ph, note: null, source: 'portal', status: 'done', texts_ok: false, send_confirmation: false, paid, created_at: new Date().toISOString() }); }
+  s.appointments.push({ id: ++s.seq, service_id: null, service_name: 'Spa Manicure', addons: [], starts_at: at(addDays(today, -60), '14:00').toISOString(), ends_at: at(addDays(today, -60), '15:00').toISOString(),
+    client_name: 'Rosa Diaz', client_phone: '+15415550166', note: null, source: 'portal', status: 'done', texts_ok: true, send_confirmation: false, paid: 35, created_at: new Date().toISOString() });
+  s.clients.push({ key: '+15415550111', name: 'Mai Tran', phone: '+15415550111', notes: 'Loves almond shape, nude chrome. Sensitive cuticles: go gentle. Likes to chat about her kids.', birthday: `1990-${today.slice(5, 7)}-21` });
   const sup = (name, kind, on_hand, unit_price, uses) => { const x = { id: ++s.seq, name, kind, on_hand, low_at: 1, unit_price, note: null, active: true };
     s.supplies.push(x); s.supplyLog.push({ id: ++s.seq, supply_id: x.id, kind: 'bought', qty: on_hand + uses.length, cost: unit_price * (on_hand + uses.length), at: at(addDays(today, -70)).toISOString() });
     uses.forEach(dd => s.supplyLog.push({ id: ++s.seq, supply_id: x.id, kind: 'used', qty: 1, cost: null, at: at(addDays(today, -dd)).toISOString() })); };
@@ -138,7 +152,7 @@ function demoState() {
 function demoRender(s, tpl, a) {
   const st = new Date(a.starts_at), d = ymd(st), t = ymd();
   const tm = fmtTime(st), dy = d === t ? 'today' : d === addDays(t, 1) ? 'tomorrow' : fmtDate(d);
-  const svc = a.service_name + (a.addons?.length ? ' + ' + a.addons.join(', ') : '');
+  const svc = a.service_name + (a.addons?.length ? ' + ' + a.addons.join(' + ') : '');
   return tpl.replaceAll('{first}', a.client_name.trim().split(' ')[0]).replaceAll('{name}', a.client_name.trim()).replaceAll('{service}', svc)
     .replaceAll('{time}', tm).replaceAll('{day}', dy).replaceAll('{date}', fmtDate(d)).replaceAll('{when}', `${dy} at ${tm}`);
 }
@@ -220,8 +234,25 @@ const Demo = {
   async saveReceipt(r) { await wait(200); const s = st(); if (r.id) { const cur = s.receipts.find(x => x.id === r.id); Object.assign(cur, r); return { ...cur }; }
     const n = { id: ++s.seq, kind: 'receipt', day: ymd(), amount: null, note: null, photo_path: null, created_at: new Date().toISOString(), ...r }; s.receipts.push(n); return { ...n }; },
   async deleteReceipt(r) { await wait(120); const s = st(); s.receipts = s.receipts.filter(x => x.id !== r.id); },
-  async uploadPhoto(blob) { await wait(400); const path = `demo/${Date.now()}.jpg`; st().photos[path] = URL.createObjectURL(blob); return path; },
+  async uploadPhoto(blob, folder = '') { await wait(400); const path = `demo/${folder}${Date.now()}.jpg`; st().photos[path] = URL.createObjectURL(blob); return path; },
   async photoUrls(paths) { const s = st(); return Object.fromEntries(paths.filter(p => s.photos[p]).map(p => [p, s.photos[p]])); },
+  async clientList() {
+    await wait(120); const s = st(), m = new Map(), now = Date.now();
+    s.appointments.forEach(a => { const k = a.client_phone || 'name:' + a.client_name.trim().toLowerCase();
+      const c = m.get(k) || { key: k, name: a.client_name, phone: a.client_phone, visits: 0, last_visit: null, next_visit: null, notes: null, birthday: null, _t: 0 };
+      const st0 = new Date(a.starts_at).getTime(), done = a.status === 'done' || (a.status === 'booked' && new Date(a.ends_at).getTime() < now);
+      if (st0 > c._t) { c._t = st0; c.name = a.client_name; }
+      if (done) { c.visits++; if (!c.last_visit || st0 > new Date(c.last_visit).getTime()) c.last_visit = a.starts_at; }
+      if (a.status === 'booked' && st0 > now && (!c.next_visit || st0 < new Date(c.next_visit).getTime())) c.next_visit = a.starts_at;
+      m.set(k, c); });
+    s.clients.forEach(c => { const x = m.get(c.key) || { key: c.key, name: c.name, phone: c.phone, visits: 0, last_visit: null, next_visit: null }; Object.assign(x, { name: c.name, notes: c.notes, birthday: c.birthday }); m.set(c.key, x); });
+    return [...m.values()].map(({ _t, ...c }) => c).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  },
+  async clientHistory(c) { await wait(100); return st().appointments.filter(a => c.phone ? a.client_phone === c.phone : a.client_name.toLowerCase() === c.name.toLowerCase()).sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at)).map(a => ({ ...a })); },
+  async saveClient(c) { await wait(150); const s = st(); const cur = s.clients.find(x => x.key === c.key); if (cur) Object.assign(cur, c); else s.clients.push({ notes: null, birthday: null, ...c }); return { ...c }; },
+  async clientPhotos(key) { await wait(80); return st().clientPhotos.filter(p => p.client_key === key).slice().reverse(); },
+  async addClientPhoto(key, blob) { const path = await this.uploadPhoto(blob, 'clients'); const s = st(); const ph = { id: ++s.seq, client_key: key, photo_path: path, taken_on: ymd() }; s.clientPhotos.push(ph); return ph; },
+  async deleteClientPhoto(ph) { const s = st(); s.clientPhotos = s.clientPhotos.filter(p => p.id !== ph.id); },
   async supplies() { await wait(100); return st().supplies.filter(x => x.active).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)).map(x => ({ ...x })); },
   async saveSupply(x) { await wait(150); const s = st(); if (x.id) { const cur = s.supplies.find(y => y.id === x.id); Object.assign(cur, x); return { ...cur }; }
     const n = { id: ++s.seq, kind: 'Other', on_hand: 0, low_at: 1, unit_price: null, note: null, active: true, ...x }; s.supplies.push(n); return { ...n }; },
