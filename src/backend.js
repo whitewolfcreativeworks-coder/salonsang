@@ -75,6 +75,25 @@ const Live = {
     const r = unwrap(await (await sb()).storage.from('receipts').createSignedUrls(paths, 3600));
     return Object.fromEntries(r.filter(x => x.signedUrl).map(x => [x.path, x.signedUrl]));
   },
+  // ---- portal: time off
+  async timeOff(from, to) { return unwrap(await (await sb()).from('time_off').select('*').lt('starts_at', to.toISOString()).gt('ends_at', from.toISOString()).order('starts_at')); },
+  async addTimeOff(rows) { return unwrap(await (await sb()).from('time_off').insert(rows.map(r => ({ starts_at: r.starts_at.toISOString(), ends_at: r.ends_at.toISOString(), note: r.note || null, grp: r.grp || null }))).select()); },
+  async deleteTimeOff(x, all = false) { const c = await sb(); unwrap(all && x.grp ? await c.from('time_off').delete().eq('grp', x.grp).gte('starts_at', x.starts_at) : await c.from('time_off').delete().eq('id', x.id)); },
+  // ---- portal: backup (everything, page by page)
+  async backup() {
+    const c = await sb(), out = {};
+    const tables = { settings: 'id', services: 'id', openings: 'id', time_off: 'id', appointments: 'id', messages: 'id', clients: 'key',
+                     client_photos: 'id', receipts: 'id', supplies: 'id', supply_log: 'id' };
+    for (const [t, pk] of Object.entries(tables)) {
+      const rows = [];
+      for (let from = 0; ; from += 1000) {
+        const page = unwrap(await c.from(t).select('*').order(pk, { ascending: true }).range(from, from + 999));
+        rows.push(...page); if (page.length < 1000) break;
+      }
+      out[t] = rows;
+    }
+    return out;
+  },
   // ---- portal: clients
   async clientList() { return unwrap(await (await sb()).rpc('owner_client_list')); },
   async clientHistory(c) {
@@ -106,7 +125,8 @@ const SERVICES = [
   [20, 'Overlay', 'Dip Powder overlay', '$55', 75], [21, 'Overlay', 'Hard Gel overlay', '$55', 75], [22, 'Overlay', 'Builder Gel overlay', '$55', 75],
   [23, 'Extras', 'Polish Change', '$20', 20], [24, 'Extras', 'Gel Polish Change', '$30', 30], [25, 'Extras', 'Nail Trim', '$15', 15], [26, 'Extras', 'Toenail Trim', '$20', 20],
   [27, 'Add-on', 'French Tip', '+$5', 10], [28, 'Add-on', 'French Tip Gel', '+$10', 15], [29, 'Add-on', 'Callus Removal', '+$10', 10],
-  [30, 'Add-on', 'Take Off Gel', '$10', 10], [31, 'Add-on', 'Take Off Dip, Hard Gel or Builder', '$15', 20], [32, 'Add-on', 'Nail Repair', '$5 each', 5], [33, 'Add-on', 'Specialty nail art design', 'priced by design', 30]
+  [30, 'Add-on', 'Take Off Gel', '$10', 10], [31, 'Add-on', 'Take Off Dip, Hard Gel or Builder', '$15', 20], [32, 'Add-on', 'Nail Repair', '$5 each', 5], [33, 'Add-on', 'Specialty nail art design', 'priced by design', 30],
+  [34, 'Repair', 'Repair / fix · 1–2 nails', 'priced by repair', 30], [35, 'Repair', 'Repair / fix · 3–5 nails', 'priced by repair', 60]
 ].map(([id, category, name, price, minutes], i) => ({ id, category, name, price, minutes, is_addon: category === 'Add-on', online: true, active: true, sort: i }));
 
 function demoState() {
@@ -117,7 +137,7 @@ function demoState() {
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
       reminder_template_pm: "Hi {first}! ✨ Just a sweet reminder: your {service} with Sang is today at {time}. Salon Sang · Sola Salon Studios, Suite 12. See you soon! 💅 Need to change it? Reply or call 530-648-4977 💖" },
     services: SERVICES.map(x => ({ ...x })), openings: [], appointments: [], messages: [], seq: 100,
-    receipts: [], supplies: [], supplyLog: [], photos: {}, clients: [], clientPhotos: []
+    receipts: [], supplies: [], supplyLog: [], photos: {}, clients: [], clientPhotos: [], timeOff: []
   };
   // pretend bookkeeping: a few past visits, supplies with some history, a receipt and a note
   const past = [['Mai Tran', 'Premier Gel Pedicure', 80, '+15415550111'], ['Jessica Rivera', 'Gel Manicure', 45, '+15415550142'], ['Linh Nguyen', 'Dipping full set', null, '+15415550133'], ['Brooke Adams', 'Spa Pedicure', 50, '+15415550178']];
@@ -173,7 +193,8 @@ function demoFree(s, mins, from, to) {
     const os = new Date(o.starts_at).getTime(), oe = new Date(o.ends_at).getTime();
     for (let t = os; t + len <= oe; t += step) {
       if (t < from || t > to || t < earliest) continue;
-      const clash = s.appointments.some(a => a.status === 'booked' && new Date(a.starts_at).getTime() < t + len + buf && new Date(a.ends_at).getTime() > t - buf);
+      const clash = s.appointments.some(a => a.status === 'booked' && new Date(a.starts_at).getTime() < t + len + buf && new Date(a.ends_at).getTime() > t - buf)
+        || s.timeOff.some(x => new Date(x.starts_at).getTime() < t + len + buf && new Date(x.ends_at).getTime() > t);
       if (!clash) out.push(new Date(t));
     }
   }
@@ -236,6 +257,11 @@ const Demo = {
   async deleteReceipt(r) { await wait(120); const s = st(); s.receipts = s.receipts.filter(x => x.id !== r.id); },
   async uploadPhoto(blob, folder = '') { await wait(400); const path = `demo/${folder}${Date.now()}.jpg`; st().photos[path] = URL.createObjectURL(blob); return path; },
   async photoUrls(paths) { const s = st(); return Object.fromEntries(paths.filter(p => s.photos[p]).map(p => [p, s.photos[p]])); },
+  async timeOff(from, to) { await wait(80); return st().timeOff.filter(x => new Date(x.starts_at) < to && new Date(x.ends_at) > from).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at)).map(x => ({ ...x })); },
+  async addTimeOff(rows) { await wait(150); const s = st(); const out = rows.map(r => ({ id: ++s.seq, starts_at: r.starts_at.toISOString(), ends_at: r.ends_at.toISOString(), note: r.note || null, grp: r.grp || null })); s.timeOff.push(...out); return out; },
+  async deleteTimeOff(x, all = false) { const s = st(); s.timeOff = s.timeOff.filter(y => all && x.grp ? !(y.grp === x.grp && y.starts_at >= x.starts_at) : y.id !== x.id); },
+  async backup() { const s = st(); return { settings: [s.settings], services: s.services, openings: s.openings, time_off: s.timeOff, appointments: s.appointments, messages: s.messages,
+    clients: s.clients, client_photos: s.clientPhotos, receipts: s.receipts, supplies: s.supplies, supply_log: s.supplyLog }; },
   async clientList() {
     await wait(120); const s = st(), m = new Map(), now = Date.now();
     s.appointments.forEach(a => { const k = a.client_phone || 'name:' + a.client_name.trim().toLowerCase();

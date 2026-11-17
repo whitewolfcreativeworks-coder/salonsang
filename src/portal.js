@@ -100,10 +100,11 @@ const dayRange = d => [at(d), at(addDays(d, 1))];
 // ============================================================ TODAY
 async function renderToday(m) {
   const t = ymd();
-  const [appts, upcoming, msgs] = await Promise.all([
+  const [appts, upcoming, msgs, off] = await Promise.all([
     A().appointments(...dayRange(t)),
     A().appointments(at(addDays(t, 1)), at(addDays(t, 4))),
-    A().messages(at(addDays(t, -2)), at(addDays(t, 2)))
+    A().messages(at(addDays(t, -2)), at(addDays(t, 2))),
+    A().timeOff(...dayRange(t)).catch(() => [])
   ]);
   const live = appts.filter(a => a.status !== 'cancelled');
   const hour = +hm(new Date()).slice(0, 2);
@@ -113,12 +114,17 @@ async function renderToday(m) {
   m.innerHTML = `
     <header class="p-hello"><p class="p-kicker">${fmtDate(t)}</p><h1><span class="script">${hello},</span> Sang</h1>
       <p class="p-sub">${live.length ? `${live.length} ${live.length === 1 ? 'appointment' : 'appointments'} today` : 'No appointments today. Rest those hands 💖'}${due.length ? ` · <b>${due.length} text${due.length > 1 ? 's' : ''} ready to go</b>` : ''}</p></header>
-    <section class="p-list">${live.map(a => apptCard(a)).join('')}</section>
+    <section class="p-list">${[...off.map(x => ({ t: new Date(x.starts_at), x })), ...live.map(a => ({ t: new Date(a.starts_at), a }))].sort((p, q) => p.t - q.t).map(i => i.x ? offCard(i.x) : apptCard(i.a)).join('')}</section>
+    <button class="b-big p-off-btn" id="takeOff" type="button"><span>🌙</span><em>Time off<small>days off, appointments, the kids' games…</small></em></button>
+    ${backupDue() ? `<button class="p-backup-due" id="backupNow" type="button">💾 It's been a while since your last backup. <b>Save one now</b></button>` : ''}
     ${todayMsgs.length ? `<h2 class="p-h2">Texts today</h2><section class="p-card p-msgs">${todayMsgs.map(msgRow).join('')}</section>
       <p class="p-hint">Your iPhone sends these by itself every hour. If one is waiting, tap <b>Send</b> to text it yourself.</p>` : ''}
     ${upcoming.filter(a => a.status === 'booked').length ? `<h2 class="p-h2">Coming up</h2><section class="p-list">${upcoming.filter(a => a.status === 'booked').map(a => apptCard(a, true)).join('')}</section>` : ''}`;
   wireAppts(m, [...appts, ...upcoming]);
   wireMsgs(m, msgs);
+  wireOff(m, off);
+  $('#takeOff', m).onclick = () => timeOffSheet(t);
+  const bn = $('#backupNow', m); if (bn) bn.onclick = () => downloadBackup();
 }
 function apptCard(a, showDay = false) {
   const s = new Date(a.starts_at), e = new Date(a.ends_at);
@@ -165,22 +171,110 @@ async function renderCalendar(m) {
   const t = ymd();
   const start = addDays(calDay < t ? calDay : t, 0);
   const days = Array.from({ length: 28 }, (_, i) => addDays(t, i - 3));
-  const [appts, opens, allAppts] = await Promise.all([A().appointments(...dayRange(calDay)), A().openings(...dayRange(calDay)), A().appointments(at(days[0]), at(addDays(days.at(-1), 1)))]);
+  const [appts, opens, allAppts, off] = await Promise.all([A().appointments(...dayRange(calDay)), A().openings(...dayRange(calDay)), A().appointments(at(days[0]), at(addDays(days.at(-1), 1))),
+    A().timeOff(at(days[0]), at(addDays(days.at(-1), 1))).catch(() => [])]);
+  const offDays = new Set(); off.forEach(x => { for (let d = ymd(new Date(x.starts_at)); d <= ymd(new Date(new Date(x.ends_at).getTime() - 1)); d = addDays(d, 1)) offDays.add(d); });
+  const offToday = off.filter(x => new Date(x.starts_at) < at(addDays(calDay, 1)) && new Date(x.ends_at) > at(calDay));
   void start;
   const count = {}; allAppts.filter(a => a.status === 'booked').forEach(a => { const d = ymd(new Date(a.starts_at)); count[d] = (count[d] || 0) + 1; });
-  const items = [...opens.map(o => ({ t: new Date(o.starts_at), o })), ...appts.map(a => ({ t: new Date(a.starts_at), a }))].sort((x, y) => x.t - y.t || (x.o ? -1 : 1));
+  const items = [...opens.map(o => ({ t: new Date(o.starts_at), o })), ...offToday.map(x => ({ t: new Date(x.starts_at), x })), ...appts.map(a => ({ t: new Date(a.starts_at), a }))].sort((x, y) => x.t - y.t || (x.o ? -1 : 1));
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Calendar</span></h1></header>
-    <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : '<i class="z"></i>'}</button>`).join('')}</div>
+    <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : offDays.has(d) ? '<i class="off">🌙</i>' : '<i class="z"></i>'}</button>`).join('')}</div>
     <h2 class="p-h2">${esc(relDay(calDay))}${relDay(calDay).startsWith('To') ? ' · ' + fmtDate(calDay, { month: 'short', day: 'numeric' }) : ''}</h2>
     ${opens.length ? '' : `<p class="p-hint">No open times this day, so it isn't bookable online. <button class="p-link" id="openThis">Open this day</button></p>`}
-    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">Open ${fmtTime(i.o.starts_at)} – ${fmtTime(i.o.ends_at)}</div>` : apptCard(i.a)).join('') || ''}</section>
-    <button class="p-btn p-btn-soft" id="addHere">＋ Add an appointment on ${esc(fmtDate(calDay, { weekday: 'long' }))}</button>`;
+    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">Open ${fmtTime(i.o.starts_at)} – ${fmtTime(i.o.ends_at)}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
+    <div class="p-row p-cal-acts"><button class="p-btn p-btn-soft" id="addHere">＋ Appointment</button><button class="p-btn p-btn-soft" id="offHere">🌙 Time off</button></div>`;
   $$('[data-day]', m).forEach(b => b.onclick = () => { calDay = b.dataset.day; render(); });
   wireAppts(m, appts);
   $('#addHere', m).onclick = () => editAppt(null, calDay);
+  $('#offHere', m).onclick = () => timeOffSheet(calDay);
+  wireOff(m, offToday);
   const ot = $('#openThis', m); if (ot) ot.onclick = () => { hoursPrefill = calDay; go('hours'); };
   const on = $('.p-day.on', m); if (on) on.scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+
+// ============================================================ TIME OFF
+const isAllDay = x => new Date(x.ends_at) - new Date(x.starts_at) >= 23 * 3600e3;
+const offWhen = x => { const s0 = new Date(x.starts_at), e = new Date(x.ends_at);
+  if (isAllDay(x)) return 'all day';
+  if (hm(e) === '00:00') return hm(s0) === '00:00' ? 'all day' : `from ${fmtTime(s0)}`;
+  return hm(s0) === '00:00' ? `until ${fmtTime(e)}` : `${fmtTime(s0)} – ${fmtTime(e)}`; };
+function offCard(x) {
+  return `<article class="p-offc" data-off="${x.id}" tabindex="0"><i>🌙</i><div><b>Time off · ${offWhen(x)}</b>${x.note ? `<span>${esc(x.note)}</span>` : ''}</div></article>`;
+}
+function wireOff(root, list) {
+  $$('[data-off]', root).forEach(el => el.onclick = () => {
+    const x = list.find(o => o.id === +el.dataset.off); if (!x) return;
+    openSheet(`<header class="p-sheet-head"><button class="p-x big" data-close aria-label="Close">×</button><h2><span class="script">Time</span> off</h2>
+      <p class="p-sub">${esc(relDay(ymd(new Date(x.starts_at))))} · ${offWhen(x)}${x.note ? ` · ${esc(x.note)}` : ''}</p></header>
+      <button class="p-btn p-btn-soft" id="offDel">Remove this time off</button>
+      ${x.grp ? '<button class="p-btn p-btn-soft" id="offDelAll">Remove this and all the ones after it</button>' : ''}`);
+    $('#offDel').onclick = async () => { try { await A().deleteTimeOff(x); closeSheet(); toast('Removed: you\'re bookable again then'); render(); } catch (e) { fail(e); } };
+    const all = $('#offDelAll'); if (all) all.onclick = async () => { try { await A().deleteTimeOff(x, true); closeSheet(); toast('Removed'); render(); } catch (e) { fail(e); } };
+  });
+}
+function timeOffSheet(day = ymd()) {
+  openSheet(`
+    <header class="p-sheet-head"><button class="p-x big" data-close aria-label="Close">×</button><h2><span class="script">Time</span> off</h2>
+      <p class="p-sub">Nobody can book you online during this time.</p></header>
+    <form class="p-form" id="offForm">
+      <label>Day<input type="date" name="day" value="${day}" min="${ymd()}" required></label>
+      <div class="b-kinds p-when" role="radiogroup" aria-label="When">
+        ${[['all', '🌙 All day'], ['am', '☀️ Morning'], ['pm', '🌤️ Afternoon'], ['pick', '🕘 Pick times']].map(([v, l], i) => `<label><input type="radio" name="when" value="${v}" ${i ? '' : 'checked'}><span>${l}</span></label>`).join('')}
+      </div>
+      <div class="p-row" id="offTimes" hidden><label>From<input type="time" name="from" value="14:00" step="900"></label><label>Until<input type="time" name="to" value="16:00" step="900"></label></div>
+      <label>What for? <small>(optional, only you see it)</small><input name="note" maxlength="200" placeholder="Soccer game ⚽, doctor, violin lesson…"></label>
+      <details class="p-adds"><summary>More than one day, or every week</summary>
+        <label>Through <small>(last day off, for a few days in a row)</small><input type="date" name="through"></label>
+        <label class="p-chk"><input type="checkbox" name="weekly"><span>Repeat every week</span></label>
+        <label>Repeat until<input type="date" name="until"></label>
+      </details>
+      <p class="p-warn" id="offWarn" hidden></p>
+      <button class="p-btn" type="submit">Take this time off 🌙</button>
+    </form>`);
+  const f = $('#offForm');
+  const times = () => { $('#offTimes').hidden = f.when.value !== 'pick'; };
+  $$('input[name=when]', f).forEach(r => r.onchange = times);
+  f.weekly.onchange = () => { if (f.weekly.checked && !f.until.value) f.until.value = addDays(f.day.value || ymd(), 56); };
+  const plan = () => {
+    const d0 = f.day.value; if (!d0) return [];
+    const through = f.through.value && f.through.value > d0 ? f.through.value : d0;
+    const days = []; for (let d = d0; d <= through && days.length < 31; d = addDays(d, 1)) days.push(d);
+    const all = [...days];
+    if (f.weekly.checked && f.until.value) for (let k = 1; k <= 60; k++) { const more = days.map(d => addDays(d, 7 * k)).filter(d => d <= f.until.value); if (!more.length) break; all.push(...more); }
+    const w = f.when.value, [a, b] = w === 'all' ? ['00:00', null] : w === 'am' ? ['00:00', '12:00'] : w === 'pm' ? ['12:00', null] : [f.from.value, f.to.value];
+    return all.map(d => ({ starts_at: at(d, a), ends_at: b ? at(d, b) : at(addDays(d, 1)), note: f.note.value.trim() }));
+  };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const rows = plan(); if (!rows.length) return;
+    if (rows.some(r => r.ends_at <= r.starts_at)) return toast('“Until” needs to be after “From”');
+    const grp = rows.length > 1 ? 'g' + Date.now().toString(36) : null; rows.forEach(r => { r.grp = grp; });
+    const btn = $('button[type=submit]', f); btn.disabled = true;
+    try {
+      const appts = await A().appointments(rows[0].starts_at, rows.at(-1).ends_at);
+      const clash = appts.filter(a => a.status === 'booked' && rows.some(r => new Date(a.starts_at) < r.ends_at && new Date(a.ends_at) > r.starts_at));
+      if (clash.length && !confirm(`Heads up: ${clash.map(a => `${a.client_name} (${relDay(ymd(new Date(a.starts_at)))} ${fmtTime(new Date(a.starts_at))})`).join(', ')} ${clash.length === 1 ? 'is' : 'are'} booked during this time. Take the time off anyway? (Their appointment stays; you can move it.)`)) { btn.disabled = false; return; }
+      await A().addTimeOff(rows);
+      closeSheet(); toast(rows.length > 1 ? `Time off saved: ${rows.length} days 🌙` : 'Time off saved 🌙'); render();
+    } catch (er) { btn.disabled = false; fail(er); }
+  };
+}
+
+// ============================================================ BACKUP
+const backupDue = () => { try { const t = +localStorage.getItem('ss-backup') || 0; return !isDemo() && Date.now() - t > 30 * 86400e3; } catch { return false; } };
+async function downloadBackup() {
+  toast('Gathering everything…');
+  try {
+    const data = await A().backup();
+    const blob = new Blob([JSON.stringify({ app: 'Salon Sang portal', saved_at: new Date().toISOString(), ...data }, null, 1)], { type: 'application/json' });
+    const name = `salon-sang-backup-${ymd()}.json`, file = new File([blob], name, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: 'Salon Sang backup' });   // iPhone: save to Files or email it
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); }
+    try { localStorage.setItem('ss-backup', String(Date.now())); } catch {}
+    toast('Backup saved 💾'); if (view === 'today') render();
+  } catch (e) { if (e && e.name === 'AbortError') return; fail(e); }
 }
 
 // ============================================================ OPEN TIMES
@@ -343,7 +437,9 @@ async function renderSettings(m) {
   const sb = A().supabaseUrl;
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Settings</span></h1></header>
-    <button class="b-big" id="toHours" type="button"><span>🕘</span>Open times<small class="b-big-sub">when clients can book online</small></button>
+    <button class="b-big" id="toHours" type="button"><span>🕘</span><em>Open times<small>when clients can book online</small></em></button>
+    <button class="b-big" id="toOff" type="button"><span>🌙</span><em>Time off<small>days off, appointments, games</small></em></button>
+    <button class="b-big" id="doBackup" type="button"><span>💾</span><em>Download a backup<small>everything, saved to your phone</small></em></button>
     <form class="p-card p-form" id="setForm">
       <label class="p-chk big"><input type="checkbox" name="booking_open" ${s.booking_open ? 'checked' : ''}><span><b>Online booking is on</b><br><small>Turn off to pause website bookings (vacation, busy week)</small></span></label>
       <h3>Reminder texts</h3>
@@ -381,6 +477,8 @@ async function renderSettings(m) {
     <button class="p-btn p-btn-soft" id="signout">Sign out</button>`;
   const f = $('#setForm', m);
   $('#toHours', m).onclick = () => go('hours');
+  $('#toOff', m).onclick = () => timeOffSheet(ymd());
+  $('#doBackup', m).onclick = () => downloadBackup();
   const prevAll = async () => { for (const p of $$('[data-prev]', m)) {
     const k = p.dataset.prev; const sample = k === 'reminder_template_pm' ? at(addDays(ymd(), 0), '14:30') : at(addDays(ymd(), k === 'confirm_template' ? 1 : 0), '10:00');
     try { p.textContent = await A().templatePreview(f[k].value, sample); } catch { p.textContent = ''; } } };

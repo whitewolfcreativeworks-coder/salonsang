@@ -238,3 +238,16 @@ body.b-printing{overflow:hidden}
 .b-big-sub{display:block;font-size:13px;font-weight:400;color:var(--ink-soft);margin-left:auto}
 .p-back{display:block;text-align:left;padding:4px 0 8px;text-decoration:none;font-weight:600}
 .c-row .p-act{display:flex;gap:6px;flex-direction:row}
+/* ---------- time off ---------- */
+.p-offc{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:18px;background:repeating-linear-gradient(135deg,#f3eef0 0 10px,#ebe4e7 10px 20px);border:1px dashed #cfc2c7;color:#5c4e53;cursor:pointer}
+.p-offc i{font-style:normal;font-size:22px}.p-offc div{display:grid}.p-offc span{font-size:14px;color:#7a6b70}
+.p-off-btn{margin-top:14px}
+.p-days i.off{background:none;font-style:normal;font-size:11px}
+.p-cal-acts{margin-top:12px}.p-cal-acts .p-btn{margin-top:0}
+.p-when{grid-template-columns:1fr 1fr}
+.p-backup-due{display:block;width:100%;margin-top:12px;border:1px solid var(--line);background:#fff;border-radius:16px;padding:12px 14px;text-align:left;font-size:14px;color:var(--ink-soft)}
+.p-backup-due b{color:var(--pink-deep)}
+#offTimes[hidden]{display:none}
+.b-big em{display:grid;font-style:normal;line-height:1.2;text-align:left}
+.b-big em small{font-size:13px;font-weight:400;color:var(--ink-soft);margin-top:2px}
+.b-print em small{color:#ffe1ec}

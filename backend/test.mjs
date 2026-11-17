@@ -42,7 +42,7 @@ await db.exec(`
 console.log('\nWebsite (anon)');
 await asRole('anon', null, async () => {
   const info = (await q('select public.booking_info() j'))[0].j;
-  ok(info.open && info.services.length === 33, `booking_info lists ${info.services.length} services`);
+  ok(info.open && info.services.length === 35, `booking_info lists ${info.services.length} services`);
   let denied = false; try { await q('select * from public.appointments'); } catch { denied = true; }
   const rows = denied ? [] : await q('select * from public.appointments');
   ok(rows.length === 0, 'anon cannot read appointments');
@@ -182,6 +182,22 @@ ok(denied, 'the public can\'t read the client list');
 await asRole('authenticated', 'someone@else.com', async () => {
   ok((await q('select count(*)::int n from public.owner_client_list()'))[0].n === 0 && (await q('select count(*)::int n from public.clients'))[0].n === 0, 'a different logged-in user sees no clients');
 });
+
+console.log('\nTime off');
+const toBefore = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 7) t`));
+const block = toBefore[Math.floor(toBefore.length / 2)].t;
+await asRole('authenticated', 'sang@salonsang.com', () => q(`insert into public.time_off (starts_at, ends_at, note) values ($1, $1::timestamptz + interval '2 hours', 'Soccer game')`, [block]));
+const toAfter = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 7) t`));
+const inBlock = toAfter.filter(r => r.t >= new Date(block) && r.t < new Date(new Date(block).getTime() + 2 * 3600e3));
+ok(toAfter.length < toBefore.length && inBlock.length === 0, `time off hides those times from online booking (${toBefore.length} → ${toAfter.length} slots)`);
+const touching = toAfter.some(r => r.t < new Date(block) && r.t.getTime() + (15 + 10) * 60e3 > new Date(block).getTime());
+ok(!touching, 'a visit must finish (plus the break) before time off starts');
+let tdenied = 0; await asRole('anon', null, async () => { try { const r = await q('select * from public.time_off'); if (!r.length) tdenied = 1; } catch { tdenied = 1; } });
+ok(tdenied === 1, 'the public can\'t see her time off');
+const rep1 = (await asRole('anon', null, () => q(`select v.name, v.minutes from public.services v where v.id = 34`)).catch(() => [])) ;
+void rep1;
+const info2 = await asRole('anon', null, () => q('select public.booking_info() j'));
+ok(info2[0].j.services.some(v => v.name === 'Repair / fix · 1–2 nails' && v.minutes === 30 && !v.addon), 'Repair / fix (30 min) can be booked on its own');
 
 await db.exec(`select private.tick()`);
 ok(true, 'daily tick runs');

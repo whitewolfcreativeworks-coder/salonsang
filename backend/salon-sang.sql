@@ -109,6 +109,18 @@ create table if not exists public.messages (
 );
 create index if not exists msg_due on public.messages (status, send_after);
 
+-- ---------------------------------------------------------------- time off (days off, doctor, the kids' games, lessons…)
+create table if not exists public.time_off (
+  id         bigserial primary key,
+  starts_at  timestamptz not null,
+  ends_at    timestamptz not null,
+  note       text check (length(note) <= 200),
+  grp        text,                         -- same value for a set made together (several days / weekly repeats)
+  created_at timestamptz not null default now(),
+  check (ends_at > starts_at)
+);
+create index if not exists time_off_range on public.time_off (starts_at, ends_at);
+
 -- ---------------------------------------------------------------- clients (Sang's notes, birthdays, nail photos)
 -- key = the client's phone (+1XXXXXXXXXX), or 'name:<lowercase name>' when there's no number
 create table if not exists public.clients (
@@ -258,6 +270,10 @@ returns setof timestamptz language sql stable security definer set search_path =
                     where ap.status = 'booked'
                       and ap.starts_at < c.t + make_interval(mins => p_minutes + s.buffer_min)
                       and ap.ends_at   > c.t - make_interval(mins => s.buffer_min))
+    -- and must be finished (with the clean-up buffer) before any time off starts
+    and not exists (select 1 from public.time_off x
+                    where x.starts_at < c.t + make_interval(mins => p_minutes + s.buffer_min)
+                      and x.ends_at   > c.t)
   order by 1
 $$;
 
@@ -559,10 +575,11 @@ alter table public.receipts     enable row level security;
 alter table public.supplies     enable row level security;
 alter table public.supply_log   enable row level security;
 alter table public.clients      enable row level security;
+alter table public.time_off     enable row level security;
 alter table public.client_photos enable row level security;
 
 do $$ declare t text; begin
-  foreach t in array array['settings','services','openings','appointments','messages','receipts','supplies','supply_log','clients','client_photos'] loop
+  foreach t in array array['settings','services','openings','appointments','messages','receipts','supplies','supply_log','clients','client_photos','time_off'] loop
     execute format('drop policy if exists owner_all on public.%I', t);
     execute format('create policy owner_all on public.%I for all to authenticated using (private.is_owner()) with check (private.is_owner())', t);
   end loop;
@@ -624,7 +641,9 @@ insert into public.services (id, category, name, price, minutes, is_addon, onlin
   (30, 'Add-on',   'Take Off Gel',          '$10', 10, true, true, 73),
   (31, 'Add-on',   'Take Off Dip, Hard Gel or Builder', '$15', 20, true, true, 74),
   (32, 'Add-on',   'Nail Repair',           '$5 each', 5, true, true, 75),
-  (33, 'Add-on',   'Specialty nail art design', 'priced by design', 30, true, true, 76)
+  (33, 'Add-on',   'Specialty nail art design', 'priced by design', 30, true, true, 76),
+  (34, 'Repair',   'Repair / fix · 1–2 nails', 'priced by repair', 30, false, true, 55),
+  (35, 'Repair',   'Repair / fix · 3–5 nails', 'priced by repair', 60, false, true, 56)
 on conflict (id) do nothing;
 select setval(pg_get_serial_sequence('public.services','id'), greatest((select max(id) from public.services), 1));
 
