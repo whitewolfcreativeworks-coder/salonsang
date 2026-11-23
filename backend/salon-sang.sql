@@ -145,6 +145,10 @@ create index if not exists client_photos_key on public.client_photos (client_key
 -- ---------------------------------------------------------------- taxes + supplies (Sang's bookkeeping)
 -- what a client actually paid (optional; the tax summary falls back to the menu price)
 alter table public.appointments add column if not exists paid numeric(10,2) check (paid is null or paid >= 0);
+-- each appointment's private "change or cancel" link (salonsang.com/my/?t=…), and who cancelled it
+alter table public.appointments add column if not exists manage_token text default encode(gen_random_bytes(12), 'hex');
+create unique index if not exists appt_manage_token on public.appointments (manage_token);
+alter table public.appointments add column if not exists cancelled_by text check (cancelled_by in ('client','sang'));
 
 -- receipts (with a photo) and notes, for the tax guy
 create table if not exists public.receipts (
@@ -218,14 +222,17 @@ begin
   dy := case when st::date = today then 'today'
              when st::date = today + 1 then 'tomorrow'
              else to_char(st, 'FMDay, FMMon FMDD') end;
-  return replace(replace(replace(replace(replace(replace(replace(tpl,
+  return (replace(replace(replace(replace(replace(replace(replace(replace(tpl,
+    '{link}', coalesce('https://salonsang.com/my/?t=' || a.manage_token, 'salonsang.com')),
     '{first}', split_part(btrim(a.client_name), ' ', 1)),
     '{name}', btrim(a.client_name)),
     '{service}', svc),
     '{time}', tm),
     '{day}', dy),
     '{date}', to_char(st, 'FMDay, FMMon FMDD')),
-    '{when}', dy || ' at ' || tm);
+    '{when}', dy || ' at ' || tm)
+    || case when a.manage_token is null or position('{link}' in tpl) > 0 then ''
+            else E'\nChange or cancel anytime: https://salonsang.com/my/?t=' || a.manage_token end);
 end $$;
 
 -- ping Sang's phone through ntfy (free, open source). Never lets a failure block a booking.
@@ -243,7 +250,8 @@ exception when others then
 end $$;
 
 -- free start times for a service of p_minutes between p_from and p_to (web booking rules)
-create or replace function private.free_starts(p_minutes int, p_from timestamptz, p_to timestamptz)
+drop function if exists private.free_starts(int, timestamptz, timestamptz);
+create or replace function private.free_starts(p_minutes int, p_from timestamptz, p_to timestamptz, p_ignore bigint default null)
 returns setof timestamptz language sql stable security definer set search_path = '' as $$
   with s as (select * from public.settings where id = 1),
   win as (
@@ -267,7 +275,7 @@ returns setof timestamptz language sql stable security definer set search_path =
                 where o.starts_at <= c.t and o.ends_at >= c.t + make_interval(mins => p_minutes))
     -- and must not touch an existing appointment (plus a little clean-up buffer)
     and not exists (select 1 from public.appointments ap
-                    where ap.status = 'booked'
+                    where ap.status = 'booked' and ap.id is distinct from p_ignore
                       and ap.starts_at < c.t + make_interval(mins => p_minutes + s.buffer_min)
                       and ap.ends_at   > c.t - make_interval(mins => s.buffer_min))
     -- and must be finished (with the clean-up buffer) before any time off starts
@@ -453,6 +461,77 @@ begin
                            'starts_at', a.starts_at, 'ends_at', a.ends_at, 'name', a.client_name);
 end $$;
 
+-- ---------------------------------------------------------------- CLIENTS: change or cancel (private link)
+create or replace function private.appt_by_token(p_token text) returns public.appointments
+language sql stable security definer set search_path = '' as $$
+  select * from public.appointments where manage_token = p_token and length(coalesce(p_token,'')) >= 16
+$$;
+
+create or replace function public.my_appt(p_token text) returns json
+language plpgsql stable security definer set search_path = '' as $$
+declare a public.appointments := private.appt_by_token(p_token);
+begin
+  if a.id is null then return null; end if;
+  return json_build_object('first', split_part(btrim(a.client_name), ' ', 1), 'service', a.service_name, 'addons', a.addons,
+    'starts_at', a.starts_at, 'ends_at', a.ends_at, 'status', a.status,
+    'can_change', a.status = 'booked' and a.starts_at > now());
+end $$;
+
+-- open times for the same length of visit, not counting the visit itself
+create or replace function public.my_slots(p_token text, p_from date default null, p_days int default 42)
+returns setof timestamptz language plpgsql stable security definer set search_path = '' as $$
+declare a public.appointments := private.appt_by_token(p_token); s public.settings := private.cfg();
+        d0 date := coalesce(p_from, (now() at time zone s.tz)::date);
+begin
+  if a.id is null or a.status <> 'booked' or not s.booking_open then return; end if;
+  return query select * from private.free_starts((extract(epoch from a.ends_at - a.starts_at) / 60)::int,
+    (d0::timestamp at time zone s.tz), ((d0 + least(greatest(p_days,1), 62))::timestamp at time zone s.tz), a.id);
+end $$;
+
+create or replace function public.my_move(p_token text, p_start timestamptz) returns json
+language plpgsql volatile security definer set search_path = '' as $$
+declare a public.appointments := private.appt_by_token(p_token); s public.settings := private.cfg();
+        mins int; old_local timestamp; new_local timestamp;
+begin
+  perform pg_advisory_xact_lock(7104977);
+  if a.id is null then raise exception 'We couldn''t find that appointment. Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  if a.status <> 'booked' or a.starts_at <= now() then raise exception 'This appointment can''t be changed online anymore. Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  if not s.booking_open then raise exception 'Online changes are paused right now. Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  mins := (extract(epoch from a.ends_at - a.starts_at) / 60)::int;
+  if not exists (select 1 from private.free_starts(mins, p_start - interval '1 minute', p_start + interval '1 minute', a.id) t where t = p_start) then
+    raise exception 'So sorry, that time was just taken. Please pick another time 💖' using errcode = 'P0001';
+  end if;
+  old_local := a.starts_at at time zone s.tz;
+  update public.appointments set starts_at = p_start, ends_at = p_start + make_interval(mins => mins), send_confirmation = true
+   where id = a.id returning * into a;                          -- a fresh confirmation text goes out with the new time
+  new_local := a.starts_at at time zone s.tz;
+  perform private.alert('Moved 🔁',
+    a.client_name || ' · ' || a.service_name || E'\nfrom ' || to_char(old_local, 'FMDy FMMon FMDD') || ' ' || ltrim(to_char(old_local, 'FMHH12:MI AM'), '0') ||
+    E'\nto ' || to_char(new_local, 'FMDy FMMon FMDD') || ' ' || ltrim(to_char(new_local, 'FMHH12:MI AM'), '0'));
+  return public.my_appt(p_token);
+end $$;
+
+create or replace function public.my_cancel(p_token text) returns json
+language plpgsql volatile security definer set search_path = '' as $$
+declare a public.appointments := private.appt_by_token(p_token); s public.settings := private.cfg(); st timestamp;
+begin
+  if a.id is null then raise exception 'We couldn''t find that appointment. Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  if a.status = 'cancelled' then return public.my_appt(p_token); end if;
+  if a.status <> 'booked' or a.ends_at <= now() then raise exception 'This appointment can''t be cancelled online anymore. Please text 530-648-4977.' using errcode = 'P0001'; end if;
+  update public.appointments set status = 'cancelled', cancelled_by = 'client' where id = a.id returning * into a;
+  st := a.starts_at at time zone s.tz;
+  perform private.alert('Cancelled ❌',
+    a.client_name || ' · ' || a.service_name || E'\n' || to_char(st, 'FMDay, FMMon FMDD') || ' at ' || ltrim(to_char(st, 'FMHH12:MI AM'), '0') ||
+    case when a.starts_at < now() + interval '24 hours' then E'\n(short notice)' else '' end);
+  if a.client_phone is not null and a.texts_ok then
+    a.manage_token := null;                                       -- no change/cancel link on the goodbye text
+    insert into public.messages (appointment_id, kind, to_phone, body)
+    values (a.id, 'custom', a.client_phone, private.render(
+      'Hi {first}! Your {service} on {date} at {time} is cancelled, no worries at all 💖 Whenever you''re ready, book again at salonsang.com or reply here. — Sang', a));
+  end if;
+  return public.my_appt(p_token);
+end $$;
+
 -- ---------------------------------------------------------------- SANG'S iPHONE (Shortcuts)
 -- The Shortcut calls phone_outbox every hour with the secret token, texts each item, then calls phone_sent.
 create or replace function public.phone_outbox(p_token text) returns json
@@ -465,7 +544,7 @@ begin
   -- reminders for appointments that were cancelled, finished or already started are skipped
   update public.messages m set status = 'skipped'
    from public.appointments a
-   where m.appointment_id = a.id and m.status = 'pending'
+   where m.appointment_id = a.id and m.status = 'pending' and m.kind in ('confirm','reminder')
      and (a.status <> 'booked' or a.starts_at <= now() or not a.texts_ok);
   select coalesce(json_agg(json_build_object('id', m.id, 'phone', m.to_phone,
            'text', case when m.kind = 'custom' then m.body
@@ -539,7 +618,7 @@ language plpgsql stable security definer set search_path = '' as $$
 declare a public.appointments;
 begin
   if not private.is_owner() then raise exception 'not allowed' using errcode = '42501'; end if;
-  a.client_name := 'Jessica Rivera'; a.service_name := 'Gel Manicure'; a.addons := '{}';
+  a.client_name := 'Jessica Rivera'; a.service_name := 'Gel Manicure'; a.addons := '{}'; a.manage_token := 'a1b2c3d4e5f6';
   a.starts_at := coalesce(p_start, date_trunc('hour', now()) + interval '5 hours');
   return private.render(p_tpl, a);
 end $$;
@@ -626,7 +705,8 @@ revoke execute on function public.owner_setup(), public.message_preview(bigint),
 grant  execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() to authenticated;
 grant  execute on function public.booking_info(), public.open_slots(int, int[], date, int),
                            public.book(int, timestamptz, text, text, text, boolean, int[]),
-                           public.phone_outbox(text), public.phone_sent(text, bigint), public.is_owner() to anon, authenticated;
+                           public.phone_outbox(text), public.phone_sent(text, bigint), public.is_owner(),
+                           public.my_appt(text), public.my_slots(text, date, int), public.my_move(text, timestamptz), public.my_cancel(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------- the menu (minutes are first guesses; Sang can edit them in the portal)
 insert into public.services (id, category, name, price, minutes, is_addon, online, sort) values

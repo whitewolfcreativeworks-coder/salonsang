@@ -202,6 +202,34 @@ await asRole('authenticated', 'sang@salonsang.com', async () => {
   ok(paidOk, 'editing other details (like Paid) still works');
 });
 
+console.log('\nClient changes or cancels online (private link)');
+{
+  const tok = (await q(`select manage_token from public.appointments where client_name = 'Ana Lopez'`))[0].manage_token;
+  ok(/^[0-9a-f]{24}$/.test(tok), 'every appointment gets a private link token');
+  const conf = (await asRole('authenticated', 'sang@salonsang.com', () => q(`select public.message_preview(id) t from public.messages where appointment_id = (select id from public.appointments where client_name = 'Ana Lopez') and kind = 'confirm'`)))[0].t;
+  ok(conf.includes('https://salonsang.com/my/?t=' + tok), 'the confirmation text carries the change/cancel link');
+  const me = await asRole('anon', null, () => q(`select public.my_appt($1) j`, [tok]));
+  ok(me[0].j.first === 'Ana' && me[0].j.can_change, 'the link shows the client their appointment');
+  ok((await asRole('anon', null, () => q(`select public.my_appt('nope-nope-nope-nope') j`)))[0].j === null, 'a wrong link shows nothing');
+  const slots = await asRole('anon', null, () => q(`select t from public.my_slots($1) t`, [tok]));
+  ok(slots.length > 0, `open times to move to (${slots.length})`);
+  const target = slots[slots.length - 1].t;
+  const moved = (await asRole('anon', null, () => q(`select public.my_move($1, $2) j`, [tok, target])))[0].j;
+  ok(new Date(moved.starts_at).getTime() === new Date(target).getTime(), 'the client moved their own appointment');
+  const callsBefore = (await q('select count(*)::int n from net.calls'))[0].n;
+  const gone = (await asRole('anon', null, () => q(`select public.my_cancel($1) j`, [tok])))[0].j;
+  ok(gone.status === 'cancelled' && !gone.can_change, 'the client cancelled online');
+  ok((await q('select count(*)::int n from net.calls'))[0].n > callsBefore, 'Sang gets a cancel alert');
+  const bye = await q(`select body from public.messages where appointment_id = (select id from public.appointments where manage_token = $1) and kind = 'custom'`, [tok]);
+  ok(bye.length === 1 && /is cancelled, no worries/.test(bye[0].body) && !bye[0].body.includes('/my/'), 'a sweet cancellation text is queued (no link)');
+  const out = await asRole('anon', null, () => q(`select public.phone_outbox((select phone_token from private.config where id = 1)) j`).catch(() => [{ j: [] }]));
+  void out;
+  const pending = await q(`select kind, status from public.messages where appointment_id = (select id from public.appointments where manage_token = $1)`, [tok]);
+  ok(pending.filter(m => m.kind !== 'custom' && m.status === 'pending').length === 0, 'its reminder will not go out');
+  let err = ''; try { await asRole('anon', null, () => q(`select public.my_move($1, $2)`, [tok, target])); } catch (e) { err = e.message; }
+  ok(/can't be changed online/.test(err), 'a cancelled appointment cannot be moved');
+}
+
 console.log('\nTime off');
 const toBefore = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 7) t`));
 const block = toBefore[Math.floor(toBefore.length / 2)].t;

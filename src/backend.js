@@ -28,6 +28,11 @@ const Live = {
     return unwrap(await (await sb()).rpc('book', { p_service: b.service, p_start: b.start.toISOString(), p_name: b.name,
       p_phone: b.phone, p_note: b.note || null, p_texts_ok: b.textsOk, p_addons: b.addons || [] }));
   },
+  // ---- clients: change or cancel with their private link
+  async myAppt(t) { return unwrap(await (await sb()).rpc('my_appt', { p_token: t })); },
+  async mySlots(t, from = null, days = 42) { return unwrap(await (await sb()).rpc('my_slots', { p_token: t, p_from: from, p_days: days })).map(x => new Date(x)); },
+  async myMove(t, start) { return unwrap(await (await sb()).rpc('my_move', { p_token: t, p_start: start.toISOString() })); },
+  async myCancel(t) { return unwrap(await (await sb()).rpc('my_cancel', { p_token: t })); },
   // ---- portal: auth
   async session() { return unwrap(await (await sb()).auth.getSession()).session; },
   async onAuth(cb) { (await sb()).auth.onAuthStateChange((_e, s) => cb(s)); },
@@ -174,7 +179,8 @@ function demoRender(s, tpl, a) {
   const tm = fmtTime(st), dy = d === t ? 'today' : d === addDays(t, 1) ? 'tomorrow' : fmtDate(d);
   const svc = a.service_name + (a.addons?.length ? ' + ' + a.addons.join(' + ') : '');
   return tpl.replaceAll('{first}', a.client_name.trim().split(' ')[0]).replaceAll('{name}', a.client_name.trim()).replaceAll('{service}', svc)
-    .replaceAll('{time}', tm).replaceAll('{day}', dy).replaceAll('{date}', fmtDate(d)).replaceAll('{when}', `${dy} at ${tm}`);
+    .replaceAll('{time}', tm).replaceAll('{day}', dy).replaceAll('{date}', fmtDate(d)).replaceAll('{when}', `${dy} at ${tm}`)
+    .replaceAll('{link}', 'https://salonsang.com/my/?t=a1b2c3d4e5f6') + (tpl.includes('{link}') ? '' : '\nChange or cancel anytime: https://salonsang.com/my/?t=a1b2c3d4e5f6');
 }
 function demoQueue(s, a, confirm) {
   s.messages = s.messages.filter(m => !(m.appointment_id === a.id && m.status === 'pending' && m.kind !== 'custom'));
@@ -201,6 +207,7 @@ function demoFree(s, mins, from, to) {
   return out.sort((a, b) => a - b);
 }
 const wait = (ms = 250) => new Promise(r => setTimeout(r, ms));
+const demoMine = t => (t === 'demo' ? st().appointments.filter(a => a.source === 'web').sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))[0] : null);
 let S = null; const st = () => (S ||= demoState());
 const Demo = {
   demo: true,
@@ -224,6 +231,15 @@ const Demo = {
     s.appointments.push(a); demoQueue(s, a, true);
     return { id: a.id, service: a.service_name, addons: a.addons, starts_at: a.starts_at, ends_at: a.ends_at, name: a.client_name };
   },
+  // pretend client link: ?demo&t=demo opens the first online booking
+  async myAppt(t) { await wait(300); const a = demoMine(t); if (!a) return null;
+    return { first: a.client_name.split(' ')[0], service: a.service_name, addons: a.addons, starts_at: a.starts_at, ends_at: a.ends_at, status: a.status, can_change: a.status === 'booked' && new Date(a.starts_at) > new Date() }; },
+  async mySlots(t, from = null, days = 42) { await wait(250); const s = st(), a = demoMine(t); if (!a) return [];
+    const mins = (new Date(a.ends_at) - new Date(a.starts_at)) / 60e3, keep = a.status; a.status = 'moving';
+    const out = demoFree(s, mins, at(from || ymd()).getTime(), at(addDays(from || ymd(), days)).getTime()); a.status = keep; return out; },
+  async myMove(t, start) { await wait(500); const a = demoMine(t); const len = new Date(a.ends_at) - new Date(a.starts_at);
+    a.starts_at = start.toISOString(); a.ends_at = new Date(start.getTime() + len).toISOString(); return this.myAppt(t); },
+  async myCancel(t) { await wait(500); const a = demoMine(t); a.status = 'cancelled'; a.cancelled_by = 'client'; return this.myAppt(t); },
   async session() { return { user: { email: 'sang@salonsang.com' } }; },
   async onAuth() {}, async signIn() {}, async sendLink() {}, async signOut() { location.href = '/'; }, async isOwner() { return true; },
   async appointments(from, to) { await wait(120); return st().appointments.filter(a => new Date(a.starts_at) >= from && new Date(a.starts_at) < to).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at)).map(a => ({ ...a })); },

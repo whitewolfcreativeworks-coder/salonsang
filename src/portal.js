@@ -134,7 +134,7 @@ function apptCard(a, showDay = false) {
       <div class="p-when"><b>${fmtTime(s)}</b><span>${showDay ? esc(relDay(ymd(s))) : fmtTime(e)}</span></div>
       <div class="p-who"><h3>${esc(a.client_name)}</h3><p>${esc(what)}</p>
         ${a.note ? `<p class="p-note">“${esc(a.note)}”</p>` : ''}
-        <p class="p-tags">${a.source === 'web' ? '<i class="web">booked online</i>' : ''}${a.status !== 'booked' ? `<i class="st">${esc(a.status.replace('_', '-'))}</i>` : ''}${a.texts_ok ? '' : '<i>no texts</i>'}</p></div>
+        <p class="p-tags">${a.source === 'web' ? '<i class="web">booked online</i>' : ''}${a.status !== 'booked' ? `<i class="st">${esc(a.status.replace('_', '-'))}${a.cancelled_by === 'client' ? ' by client (online)' : ''}</i>` : ''}${a.texts_ok ? '' : '<i>no texts</i>'}</p></div>
       ${a.client_phone ? `<div class="p-act"><a href="tel:${a.client_phone}" aria-label="Call ${esc(a.client_name)}">☏</a><a href="${smsLink(a.client_phone)}" aria-label="Text ${esc(a.client_name)}">✉</a></div>` : ''}
     </article>`;
 }
@@ -477,7 +477,7 @@ async function renderSettings(m) {
       <div class="p-row"><label>Start times every<select name="slot_step_min">${[15, 30, 60].map(v => `<option value="${v}" ${s.slot_step_min === v ? 'selected' : ''}>${v} min</option>`).join('')}</select></label>
         <label>Break between clients<select name="buffer_min">${[0, 5, 10, 15, 20, 30].map(v => `<option value="${v}" ${s.buffer_min === v ? 'selected' : ''}>${v} min</option>`).join('')}</select></label></div>
       <h3>Your messages</h3>
-      <p class="p-hint">Words in {curly braces} fill in by themselves: {first} {name} {service} {time} {when} {date}</p>
+      <p class="p-hint">Words in {curly braces} fill in by themselves: {first} {name} {service} {time} {when} {date} {link}<br>Each client's private “change or cancel” link is added at the end by itself (or put {link} where you want it).</p>
       ${[['confirm_template', 'Confirmation (right after booking)'], ['reminder_template', 'Reminder, morning appointments'], ['reminder_template_pm', 'Reminder, afternoon appointments']].map(([k, l]) => `
         <label>${l}<textarea name="${k}" rows="4">${esc(s[k])}</textarea></label><p class="p-preview" data-prev="${k}"></p>`).join('')}
       <button class="p-btn" type="submit">Save settings</button>

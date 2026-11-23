@@ -15,6 +15,8 @@ export function initBooking() {
     const b = e.target.closest('[data-book]'); if (!b) return;
     e.preventDefault(); open(b.dataset.book || null);
   });
+  // salonsang.com/#book (from texts and the "change or cancel" page) opens booking right away
+  if (location.hash === '#book') setTimeout(() => open(null), document.documentElement.classList.contains('loading') ? 2600 : 300);
 }
 
 function build() {
