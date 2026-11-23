@@ -198,7 +198,7 @@ function demoFree(s, mins, from, to) {
   }
   for (const o of wins) {
     const os = new Date(o.starts_at).getTime(), oe = new Date(o.ends_at).getTime();
-    for (let t = os; t + len <= oe; t += step) {
+    for (let t = os; t <= oe; t += step) {   // oe = her LAST start; a visit may run past it
       if (t < from || t > to || t < earliest) continue;
       const clash = s.appointments.some(a => a.status === 'booked' && new Date(a.starts_at).getTime() < t + len + buf && new Date(a.ends_at).getTime() > t - buf)
         || s.timeOff.some(x => new Date(x.starts_at).getTime() < t + len + buf && new Date(x.ends_at).getTime() > t);

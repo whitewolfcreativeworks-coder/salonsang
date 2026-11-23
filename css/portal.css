@@ -261,5 +261,6 @@ body.b-printing{overflow:hidden}
 .p-wk .p-chk{margin:0}.p-wk i{font-style:normal;color:var(--ink-soft)}
 .p-form .p-wk input[type=time]{min-height:44px;padding:8px 10px}
 .p-wk.off input[type=time]{opacity:.35;pointer-events:none}
+.p-wk-head small{font-size:12px;color:var(--ink-soft);text-align:center;font-weight:600}
 .p-wk{grid-template-columns:74px 1fr auto 1fr;gap:5px}
 .p-form .p-wk input[type=time]{font-size:15px;padding:6px 6px;min-width:0}

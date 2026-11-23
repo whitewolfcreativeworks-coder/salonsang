@@ -52,7 +52,8 @@ create table if not exists public.settings (
   updated_at           timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict do nothing;
--- her normal week, set once: day of week (0 = Sunday … 6 = Saturday) → ["open", "close"]; a missing day = closed.
+-- her normal week, set once: day of week (0 = Sunday … 6 = Saturday) → ["first start", "last start"]; a missing day = closed.
+-- The second time is the LAST time a visit can START (she works past it), not closing time.
 -- Online booking follows these every week automatically (minus time off); 'openings' are only extra hours.
 alter table public.settings add column if not exists week_hours jsonb not null
   default '{"1":["09:30","17:00"],"2":["09:30","17:00"],"3":["09:30","17:00"],"4":["09:30","17:00"],"5":["09:30","17:00"],"6":["10:00","17:00"]}';
@@ -270,24 +271,25 @@ returns setof timestamptz language sql stable security definer set search_path =
     union all
     select starts_at, ends_at from public.openings
   ),
+  -- each window runs from her first start to her LAST start (a visit may run past it)
   win as (
-    select greatest(w.starts_at, p_from) as a, least(w.ends_at, p_to + make_interval(mins => p_minutes)) as b, w.starts_at as o_start
+    select greatest(w.starts_at, p_from) as a, least(w.ends_at, p_to) as b, w.starts_at as o_start
     from allwin w
-    where w.ends_at > w.starts_at and w.ends_at > p_from and w.starts_at < p_to
+    where w.ends_at >= w.starts_at and w.ends_at >= p_from and w.starts_at <= p_to
   ),
   cand as (
     -- starts aligned to the step, counted from the window's own start (so 9:30 opens give 9:30, 10:00 …)
     select distinct g as t
     from win, s,
-         generate_series(win.o_start, win.b - make_interval(mins => p_minutes), make_interval(mins => s.slot_step_min)) g
+         generate_series(win.o_start, win.b, make_interval(mins => s.slot_step_min)) g
     where g >= win.a
   )
   select c.t from cand c, s
   where c.t >= now() + make_interval(mins => s.min_notice_min)
     and c.t <  now() + make_interval(days => s.max_days_ahead)
     and c.t <= p_to
-    -- the whole visit must fit inside her hours
-    and exists (select 1 from allwin o where o.starts_at <= c.t and o.ends_at >= c.t + make_interval(mins => p_minutes))
+    -- the visit must START within her hours (first start … last start)
+    and exists (select 1 from allwin o where o.starts_at <= c.t and o.ends_at >= c.t)
     -- and must not touch an existing appointment (plus a little clean-up buffer)
     and not exists (select 1 from public.appointments ap
                     where ap.status = 'booked' and ap.id is distinct from p_ignore

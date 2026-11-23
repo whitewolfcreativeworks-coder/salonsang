@@ -188,7 +188,7 @@ async function renderCalendar(m) {
     <label class="p-jump">Jump to a date<input type="date" id="jump" value="${calDay}"></label>
     <h2 class="p-h2">${esc(relDay(calDay))}${relDay(calDay).startsWith('To') ? ' · ' + fmtDate(calDay, { month: 'short', day: 'numeric' }) : ''}</h2>
     ${opens.length ? '' : `<p class="p-hint">Closed this day (your normal hours), so it isn't bookable online. <button class="p-link" id="openThis">Open it anyway</button></p>`}
-    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">${i.o.weekly ? 'Open' : 'Extra hours'} ${fmtTime(new Date(i.o.starts_at))} – ${fmtTime(new Date(i.o.ends_at))}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
+    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">${i.o.weekly ? 'Booking' : 'Extra hours'} ${fmtTime(new Date(i.o.starts_at))} · last start ${fmtTime(new Date(i.o.ends_at))}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
     <div class="p-row p-cal-acts"><button class="p-btn p-btn-soft" id="addHere">＋ Appointment</button><button class="p-btn p-btn-soft" id="offHere">🌙 Time off</button></div>`;
   $$('[data-day]', m).forEach(b => b.onclick = () => { calDay = b.dataset.day; render(); });
   $('#jump', m).onchange = e => { if (e.target.value) { calDay = e.target.value; render(); } };
@@ -297,7 +297,7 @@ async function renderHours(m) {
     <button class="p-link p-back" type="button" id="toSettings">← Settings</button>
     <header class="p-hello"><h1><span class="script">Extra hours</span></h1><p class="p-sub">Your normal week is set in <b>Settings → Business hours</b>. Use this only to open extra hours, like a Sunday or a late evening.</p></header>
     <form class="p-card p-form" id="openForm">
-      <div class="p-row"><label>From<input type="time" name="from" value="09:30" step="900" required></label><label>Until<input type="time" name="to" value="${settingsCloseGuess(from)}" step="900" required></label></div>
+      <div class="p-row"><label>First start<input type="time" name="from" value="09:30" step="900" required></label><label>Last start<input type="time" name="to" value="${settingsCloseGuess(from)}" step="900" required></label></div>
       <fieldset class="p-wd"><legend>Days</legend>${WD.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${weekday(from) === i ? 'checked' : ''}><span>${d}</span></label>`).join('')}</fieldset>
       <div class="p-row"><label>Starting<input type="date" name="start" value="${from}" min="${t}" required></label>
         <label>For<select name="weeks">${[[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [6, '6 weeks'], [8, '8 weeks'], [12, '12 weeks']].map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
@@ -425,7 +425,7 @@ function editAppt(a, day = ymd(), pre = null) {
       const u = $('#useNext'); if (u) u.onclick = () => { f.time.value = hm(next); check().catch(() => {}); };
       return;
     }
-    const inside = [...weekWin(f.day.value), ...opens].some(o => new Date(o.starts_at) <= s && new Date(o.ends_at) >= e);
+    const inside = [...weekWin(f.day.value), ...opens].some(o => new Date(o.starts_at) <= s && new Date(o.ends_at) >= s);   // only the START has to be inside her hours
     w.hidden = inside; w.textContent = inside ? '' : 'Outside your open times (that’s okay)';
   };
   f.day.onchange = f.time.onchange = f.len.onchange = () => check().catch(() => {});
@@ -468,10 +468,11 @@ async function renderSettings(m) {
     <header class="p-hello"><h1><span class="script">Settings</span></h1></header>
     <form class="p-card p-form" id="weekForm">
       <h3>🕘 Business hours</h3>
-      <p class="p-hint">Clients can book inside these every week, automatically. For days off or appointments, use <b>Time off</b>.</p>
+      <p class="p-hint">Clients can book these every week, automatically. <b>Last start</b> is the latest a visit can begin (it can run past it). For days off or appointments, use <b>Time off</b>.</p>
+      <div class="p-wk p-wk-head" aria-hidden="true"><span></span><small>First start</small><i></i><small>Last start</small></div>
       ${[1, 2, 3, 4, 5, 6, 0].map(d => { const h = s.week_hours?.[String(d)]; const on = Array.isArray(h);
         return `<div class="p-wk${on ? '' : ' off'}" data-wd="${d}"><label class="p-chk"><input type="checkbox" name="on${d}" ${on ? 'checked' : ''}><span>${WD[d]}</span></label>
-          <input type="time" name="a${d}" step="900" value="${on ? h[0] : '09:30'}" aria-label="${WD[d]} opens"><i>–</i><input type="time" name="b${d}" step="900" value="${on ? h[1] : '17:00'}" aria-label="${WD[d]} closes"></div>`; }).join('')}
+          <input type="time" name="a${d}" step="900" value="${on ? h[0] : '09:30'}" aria-label="${WD[d]} first start"><i>–</i><input type="time" name="b${d}" step="900" value="${on ? h[1] : '17:00'}" aria-label="${WD[d]} last start"></div>`; }).join('')}
       <button class="p-btn" type="submit">Save hours ✓</button>
       <button class="p-link" type="button" id="toHours">Open extra hours on a day you're normally closed</button>
     </form>

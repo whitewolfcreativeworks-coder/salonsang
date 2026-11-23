@@ -59,7 +59,7 @@ const local = r => new Date(r.t).toLocaleString('en-US', { timeZone: tz, weekday
 console.log('  first slots:', slots.slice(0, 4).map(local).join(', '), '…', slots.length, 'total');
 ok(slots.length > 0 && local(slots[0]).includes('9:30'), 'Gel Manicure slots start at 9:30 AM tomorrow');
 const lastDay1 = slots.filter(r => local(r).startsWith(local(slots[0]).slice(0, 3))).pop();
-ok(local(lastDay1).includes('4:00'), `last start that fits before 5 PM is ${local(lastDay1)} (60 min service)`);
+ok(local(lastDay1).includes('5:00'), `5 PM is the last START (visit runs past it): ${local(lastDay1)} (60 min service)`);
 
 // book 10:00 tomorrow
 const ten = slots.find(r => local(r).includes('10:00'));
