@@ -170,7 +170,8 @@ function wireMsgs(root, msgs) {
 async function renderCalendar(m) {
   const t = ymd();
   const start = addDays(calDay < t ? calDay : t, 0);
-  const days = Array.from({ length: 28 }, (_, i) => addDays(t, i - 3));
+  const days = Array.from({ length: 49 }, (_, i) => addDays(t, i - 3));        // a few days back, ~6½ weeks ahead
+  if (calDay > days.at(-1)) days.push(...Array.from({ length: 7 }, (_, i) => addDays(calDay, i - 3)).filter(d => d > days.at(-1)));
   const [appts, opens, allAppts, off] = await Promise.all([A().appointments(...dayRange(calDay)), A().openings(...dayRange(calDay)), A().appointments(at(days[0]), at(addDays(days.at(-1), 1))),
     A().timeOff(at(days[0]), at(addDays(days.at(-1), 1))).catch(() => [])]);
   const offDays = new Set(); off.forEach(x => { for (let d = ymd(new Date(x.starts_at)); d <= ymd(new Date(new Date(x.ends_at).getTime() - 1)); d = addDays(d, 1)) offDays.add(d); });
@@ -181,11 +182,13 @@ async function renderCalendar(m) {
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Calendar</span></h1></header>
     <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : offDays.has(d) ? '<i class="off">🌙</i>' : '<i class="z"></i>'}</button>`).join('')}</div>
+    <label class="p-jump">Jump to a date<input type="date" id="jump" value="${calDay}"></label>
     <h2 class="p-h2">${esc(relDay(calDay))}${relDay(calDay).startsWith('To') ? ' · ' + fmtDate(calDay, { month: 'short', day: 'numeric' }) : ''}</h2>
     ${opens.length ? '' : `<p class="p-hint">No open times this day, so it isn't bookable online. <button class="p-link" id="openThis">Open this day</button></p>`}
     <section class="p-list">${items.map(i => i.o ? `<div class="p-open">Open ${fmtTime(i.o.starts_at)} – ${fmtTime(i.o.ends_at)}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
     <div class="p-row p-cal-acts"><button class="p-btn p-btn-soft" id="addHere">＋ Appointment</button><button class="p-btn p-btn-soft" id="offHere">🌙 Time off</button></div>`;
   $$('[data-day]', m).forEach(b => b.onclick = () => { calDay = b.dataset.day; render(); });
+  $('#jump', m).onchange = e => { if (e.target.value) { calDay = e.target.value; render(); } };
   wireAppts(m, appts);
   $('#addHere', m).onclick = () => editAppt(null, calDay);
   $('#offHere', m).onclick = () => timeOffSheet(calDay);
@@ -281,8 +284,8 @@ async function downloadBackup() {
 let hoursPrefill = null;
 async function renderHours(m) {
   const t = ymd();
-  const opens = await A().openings(at(t), at(addDays(t, 60)));
-  const appts = await A().appointments(at(t), at(addDays(t, 60)));
+  const opens = await A().openings(at(t), at(addDays(t, 90)));
+  const appts = await A().appointments(at(t), at(addDays(t, 90)));
   const booked = {}; appts.filter(a => a.status === 'booked').forEach(a => { const d = ymd(new Date(a.starts_at)); booked[d] = (booked[d] || 0) + 1; });
   const byDay = {}; opens.forEach(o => (byDay[ymd(new Date(o.starts_at))] ||= []).push(o));
   const from = hoursPrefill || t;
@@ -294,7 +297,7 @@ async function renderHours(m) {
       <div class="p-row"><label>From<input type="time" name="from" value="09:30" step="900" required></label><label>Until<input type="time" name="to" value="${settingsCloseGuess(from)}" step="900" required></label></div>
       <fieldset class="p-wd"><legend>Days</legend>${WD.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${singleDay ? (weekday(from) === i ? 'checked' : '') : (i ? 'checked' : '')}><span>${d}</span></label>`).join('')}</fieldset>
       <div class="p-row"><label>Starting<input type="date" name="start" value="${from}" min="${t}" required></label>
-        <label>For<select name="weeks">${[[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [8, '8 weeks']].map(([v, l]) => `<option value="${v}" ${v === (singleDay ? 1 : 2) ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <label>For<select name="weeks">${[[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [6, '6 weeks'], [8, '8 weeks'], [12, '12 weeks']].map(([v, l]) => `<option value="${v}" ${v === (singleDay ? 1 : 6) ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
       <p class="p-hint" id="openPreview"></p>
       <button class="p-btn" type="submit">Open these times ✨</button>
     </form>
@@ -447,7 +450,7 @@ async function renderSettings(m) {
         <label>But not before<input type="time" name="remind_earliest" value="${String(s.remind_earliest).slice(0, 5)}"></label></div>
       <h3>Online booking rules</h3>
       <div class="p-row"><label>Book at least<select name="min_notice_min">${[[60, '1 hour'], [120, '2 hours'], [180, '3 hours'], [720, '12 hours'], [1440, '1 day']].map(([v, l]) => `<option value="${v}" ${s.min_notice_min === v ? 'selected' : ''}>${l} ahead</option>`).join('')}</select></label>
-        <label>Up to<select name="max_days_ahead">${[14, 30, 60, 90].map(v => `<option value="${v}" ${s.max_days_ahead === v ? 'selected' : ''}>${v} days out</option>`).join('')}</select></label></div>
+        <label>Up to<select name="max_days_ahead">${[[14, '2 weeks'], [30, '1 month'], [42, '6 weeks'], [60, '2 months'], [90, '3 months']].map(([v, l]) => `<option value="${v}" ${s.max_days_ahead === v ? 'selected' : ''}>${l} out</option>`).join('')}</select></label></div>
       <div class="p-row"><label>Start times every<select name="slot_step_min">${[15, 30, 60].map(v => `<option value="${v}" ${s.slot_step_min === v ? 'selected' : ''}>${v} min</option>`).join('')}</select></label>
         <label>Break between clients<select name="buffer_min">${[0, 5, 10, 15, 20, 30].map(v => `<option value="${v}" ${s.buffer_min === v ? 'selected' : ''}>${v} min</option>`).join('')}</select></label></div>
       <h3>Your messages</h3>

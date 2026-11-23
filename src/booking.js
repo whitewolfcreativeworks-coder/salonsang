@@ -5,7 +5,7 @@ import { SALON_PHONE } from './config.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const DAYS = 21;
+const DAYS = 42;                                   // clients can book up to 6 weeks out
 const CAT_ORDER = ['Manicure', 'Pedicure', 'Full set', 'Fill', 'Overlay', 'Repair', 'Extras'];
 
 let sheet, info, state;
