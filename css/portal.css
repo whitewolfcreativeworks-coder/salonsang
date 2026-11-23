@@ -253,3 +253,6 @@ body.b-printing{overflow:hidden}
 .b-print em small{color:#ffe1ec}
 .p-jump{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 4px 0;font-size:14px;font-weight:600;color:var(--ink-soft)}
 .p-jump input{font:inherit;font-weight:400;font-size:16px;padding:8px 12px;border-radius:12px;border:1.5px solid var(--line);background:#fff;color:var(--ink)}
+.p-warn.stop{background:#ffe3e6;color:#9b1c2e;border:1.5px solid #f3a3ad;font-size:15px;line-height:1.45}
+.p-warn.stop .p-mini{display:block;margin-top:8px;background:#9b1c2e}
+.p-form button[type=submit]:disabled{opacity:.45}

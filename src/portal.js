@@ -378,6 +378,7 @@ function editAppt(a, day = ymd(), pre = null) {
     const extra = $$('input[name=addon]:checked', f).reduce((s, x) => s + +x.dataset.min, 0)
       + extras.reduce((s, n) => s + (services.find(x => x.name === n)?.minutes || 0), 0);
     f.len.value = base + extra;
+    setTimeout(() => check().catch(() => {}));            // the length changed: re-check for overlaps
   };
   const drawExtras = () => {
     $('#extras').innerHTML = extras.map((n, i) => `<span class="p-xchip">＋ ${esc(n)}<button type="button" data-xrm="${i}" aria-label="Remove ${esc(n)}">×</button></span>`).join('');
@@ -396,19 +397,41 @@ function editAppt(a, day = ymd(), pre = null) {
     $$('button', box).forEach(b => b.onclick = () => { f.name.value = b.dataset.n; f.phone.value = prettyPhone(b.dataset.p); box.innerHTML = ''; });
   }, 220); };
   // gentle warnings (Sang's portal is the law, so they never block)
+  // one client at a time: an overlap with someone already booked is a hard stop (Save locks until fixed);
+  // outside open hours is only a gentle note (Sang's portal can still book extra hours)
+  let blocked = false;
   const check = async () => {
-    const w = $('#warn'); if (!f.day.value || !f.time.value) return (w.hidden = true);
-    const s = at(f.day.value, f.time.value), e = new Date(s.getTime() + +f.len.value * 60000);
+    const w = $('#warn'), btn = $('button[type=submit]', f);
+    if (!f.day.value || !f.time.value) { w.hidden = true; blocked = false; btn.disabled = false; return; }
+    const s = at(f.day.value, f.time.value), len = +f.len.value || 60, e = new Date(s.getTime() + len * 60000);
     const [same, opens] = await Promise.all([A().appointments(...dayRange(f.day.value)), A().openings(...dayRange(f.day.value))]);
-    const clash = same.filter(x => x.status === 'booked' && x.id !== a?.id && new Date(x.starts_at) < e && new Date(x.ends_at) > s);
+    const booked = same.filter(x => x.status === 'booked' && x.id !== a?.id).sort((p, q) => new Date(p.starts_at) - new Date(q.starts_at));
+    const clash = booked.filter(x => new Date(x.starts_at) < e && new Date(x.ends_at) > s);
+    blocked = clash.length > 0 && (!a || a.status === 'booked');
+    btn.disabled = blocked;
+    w.classList.toggle('stop', blocked);
+    if (blocked) {
+      // next time the whole visit fits (after her break), the same day
+      const buf = (settings?.buffer_min ?? 10) * 60000; let t = s.getTime();
+      for (const x of booked) { const xs = new Date(x.starts_at).getTime(), xe = new Date(x.ends_at).getTime(); if (xs < t + len * 60000 + buf && xe + buf > t) t = xe + buf; }
+      const next = new Date(Math.ceil(t / 300000) * 300000);
+      const sameDay = ymd(next) === f.day.value;
+      w.innerHTML = `⛔ <b>Already booked:</b> ${clash.map(x => `${esc(x.client_name)} (${fmtTime(new Date(x.starts_at))} – ${fmtTime(new Date(x.ends_at))})`).join(', ')}. You can only take one client at a time.
+        ${sameDay ? `<button type="button" class="p-mini" id="useNext">Book at ${fmtTime(next)} instead</button>` : '<br>No more room that day. Try another day.'}`;
+      w.hidden = false;
+      const u = $('#useNext'); if (u) u.onclick = () => { f.time.value = hm(next); check().catch(() => {}); };
+      return;
+    }
     const inside = opens.some(o => new Date(o.starts_at) <= s && new Date(o.ends_at) >= e);
-    const msg = [clash.length ? `Overlaps ${clash.map(x => `${x.client_name} at ${fmtTime(x.starts_at)}`).join(', ')}` : '', !inside ? 'Outside your open times (that’s okay)' : ''].filter(Boolean);
-    w.hidden = !msg.length; w.textContent = msg.join(' · ');
+    w.hidden = inside; w.textContent = inside ? '' : 'Outside your open times (that’s okay)';
   };
   f.day.onchange = f.time.onchange = f.len.onchange = () => check().catch(() => {});
   if (a) check().catch(() => {});
+  f.service.addEventListener('change', () => check().catch(() => {}));
   f.onsubmit = async e => {
     e.preventDefault();
+    await check().catch(() => {});
+    if (blocked) return toast('That time is already taken. Pick another time.');
     const phone = f.phone.value.trim() ? normPhone(f.phone.value) : null;
     if (f.phone.value.trim() && !phone) return toast('That phone number looks off');
     const start = at(f.day.value, f.time.value);

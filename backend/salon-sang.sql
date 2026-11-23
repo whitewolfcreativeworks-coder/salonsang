@@ -327,6 +327,27 @@ end $$;
 
 drop trigger if exists appt_touch on public.appointments;
 create trigger appt_touch before insert or update on public.appointments for each row execute function private.appt_changed();
+-- Sang can only do one client at a time: two booked appointments may never overlap (touching is fine).
+-- Checked on every new booking and whenever a time, length or status changes (portal and website alike).
+create or replace function private.appt_no_overlap() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare c public.appointments; s public.settings := private.cfg();
+begin
+  if new.status <> 'booked' then return new; end if;
+  if tg_op = 'UPDATE' and new.starts_at = old.starts_at and new.ends_at = old.ends_at and new.status = old.status then return new; end if;
+  select * into c from public.appointments x
+   where x.status = 'booked' and x.id <> new.id and x.starts_at < new.ends_at and x.ends_at > new.starts_at
+   order by x.starts_at limit 1;
+  if found then
+    raise exception 'Already booked: % (% – %). Please pick another time.', c.client_name,
+      ltrim(to_char(c.starts_at at time zone s.tz, 'HH12:MI AM'), '0'), ltrim(to_char(c.ends_at at time zone s.tz, 'HH12:MI AM'), '0')
+      using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+drop trigger if exists appt_overlap on public.appointments;
+create trigger appt_overlap before insert or update on public.appointments for each row execute function private.appt_no_overlap();
+
 drop trigger if exists appt_msgs on public.appointments;
 create trigger appt_msgs after insert or update on public.appointments for each row execute function private.appt_after();
 

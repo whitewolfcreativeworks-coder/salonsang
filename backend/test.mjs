@@ -183,6 +183,25 @@ await asRole('authenticated', 'someone@else.com', async () => {
   ok((await q('select count(*)::int n from public.owner_client_list()'))[0].n === 0 && (await q('select count(*)::int n from public.clients'))[0].n === 0, 'a different logged-in user sees no clients');
 });
 
+console.log('\nNo double-booking from the portal');
+await asRole('authenticated', 'sang@salonsang.com', async () => {
+  const d = `(now() at time zone '${tz}')::date + 3`;
+  const at = t => `((${d} + time '${t}') at time zone '${tz}')`;
+  await q(`insert into public.appointments (service_name, starts_at, ends_at, client_name) values ('Gel Manicure', ${at('10:00')}, ${at('11:00')}, 'First Client')`);
+  let msg = '';
+  try { await q(`insert into public.appointments (service_name, starts_at, ends_at, client_name) values ('Spa Pedicure', ${at('10:30')}, ${at('11:30')}, 'Second Client')`); } catch (e) { msg = e.message; }
+  ok(/Already booked: First Client \(10:00 AM – 11:00 AM\)/.test(msg), 'overlapping booking is refused: ' + msg);
+  let okAdj = true; try { await q(`insert into public.appointments (service_name, starts_at, ends_at, client_name) values ('Spa Pedicure', ${at('11:00')}, ${at('12:00')}, 'Right After')`); } catch { okAdj = false; }
+  ok(okAdj, 'back to back (11:00 right after 10–11) is fine');
+  await q(`update public.appointments set status = 'cancelled' where client_name = 'First Client'`);
+  let okCancel = true; try { await q(`insert into public.appointments (service_name, starts_at, ends_at, client_name) values ('Polish Change', ${at('10:00')}, ${at('10:30')}, 'Took The Spot')`); } catch { okCancel = false; }
+  ok(okCancel, 'a cancelled appointment frees its time');
+  let blocked = false; try { await q(`update public.appointments set status = 'booked' where client_name = 'First Client'`); } catch { blocked = true; }
+  ok(blocked, 'restoring a cancelled appointment into a taken time is refused');
+  let paidOk = true; try { await q(`update public.appointments set paid = 40 where client_name = 'Took The Spot'`); } catch { paidOk = false; }
+  ok(paidOk, 'editing other details (like Paid) still works');
+});
+
 console.log('\nTime off');
 const toBefore = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 7) t`));
 const block = toBefore[Math.floor(toBefore.length / 2)].t;
