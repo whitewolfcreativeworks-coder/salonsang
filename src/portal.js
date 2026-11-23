@@ -541,6 +541,8 @@ async function renderSettings(m) {
       confirm_template: f.confirm_template.value, reminder_template: f.reminder_template.value, reminder_template_pm: f.reminder_template_pm.value };
     try { settings = await A().saveSettings(patch); toast('Saved ✓'); } catch (er) { fail(er); }
   };
+  // the dropdowns and the on/off switch save the moment she changes them (no hunting for the Save button)
+  $$('select, input[type=checkbox], input[type=time]', f).forEach(el => el.onchange = () => f.requestSubmit());
   $$('.p-svc', m).forEach(row => row.onchange = async () => {
     const id = +row.dataset.svc;
     const patch = { id, price: $('[name=price]', row).value.trim(), minutes: +$('[name=minutes]', row).value, online: $('[name=online]', row).checked };
