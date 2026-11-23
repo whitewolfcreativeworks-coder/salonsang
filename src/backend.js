@@ -137,7 +137,7 @@ const SERVICES = [
 function demoState() {
   const today = ymd();
   const s = {
-    settings: { id: 1, booking_open: true, tz: TZ, slot_step_min: 30,
+    settings: { id: 1, booking_open: true, tz: TZ, slot_step_min: 15,
       week_hours: { 1: ['09:30', '17:00'], 2: ['09:30', '17:00'], 3: ['09:30', '17:00'], 4: ['09:30', '17:00'], 5: ['09:30', '17:00'], 6: ['10:00', '17:00'] }, buffer_min: 0, min_notice_min: 120, max_days_ahead: 60, remind_hours_before: 4, remind_earliest: '08:00:00',
       confirm_template: "Hi {first}! 💅 You're all booked at Salon Sang: {service}, {when}. Sola Salon Studios, Suite 12 (440 W 6th Ave). Can't wait to see you! ✨ Need to change it? Just reply or call 530-648-4977 💖",
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
@@ -212,7 +212,7 @@ const demoMine = t => (t === 'demo' ? st().appointments.filter(a => a.source ===
 let S = null; const st = () => (S ||= demoState());
 const Demo = {
   demo: true,
-  async info() { await wait(); const s = st(); return { open: s.settings.booking_open, tz: TZ, step: 30, max_days: 60,
+  async info() { await wait(); const s = st(); return { open: s.settings.booking_open, tz: TZ, step: 15, max_days: 60,
     services: s.services.filter(v => v.active && v.online).map(v => ({ id: v.id, category: v.category, name: v.name, price: v.price, minutes: v.minutes, addon: v.is_addon })) }; },
   async slots(service, addons = [], from = null, days = 14) {
     await wait(200); const s = st(); const svc = s.services.find(v => v.id === service); if (!svc) return [];

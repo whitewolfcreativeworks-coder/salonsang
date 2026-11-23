@@ -30,7 +30,7 @@ await db.exec(sql);
 await db.exec(`grant all on all tables in schema public to anon, authenticated; grant all on all sequences in schema public to anon, authenticated;`);
 await db.exec(`update private.config set owner_emails = array['sang@salonsang.com'];`);
 // the original tests use explicit open times only; weekly hours get their own test at the end
-await db.exec(`update public.settings set week_hours = '{}'`);
+await db.exec(`update public.settings set week_hours = '{}', slot_step_min = 30, buffer_min = 10`);  // older tests were written for 30-min steps + a 10-min break
 await db.exec(sql); // idempotent re-run
 console.log('schema loaded twice ✓');
 
@@ -263,6 +263,18 @@ console.log('\nWeekly business hours (no open times needed)');
   await asRole('authenticated', 'sang@salonsang.com', () => q(`insert into public.time_off (starts_at, ends_at, note) values ($1::timestamptz - interval '1 minute', $1::timestamptz + interval '3 hours', 'Doctor')`, [wkDay.t]));
   const after = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 14) t`));
   ok(!after.some(r => r.t.getTime() === wkDay.t.getTime()), 'time off still blocks her normal hours');
+}
+
+console.log('\nStart times every 15 minutes, no break');
+{
+  await db.exec(`delete from public.time_off; update public.settings set slot_step_min = 15, buffer_min = 0`);
+  const d = `((now() at time zone '${tz}')::date + 8)`;
+  const dow = (await q(`select extract(dow from ${d})::int w`))[0].w;
+  await db.exec(`update public.settings set week_hours = '{"${dow}":["09:30","17:00"]}'; delete from public.appointments where starts_at::date between ${d} - 1 and ${d} + 1`);
+  await db.exec(`insert into public.appointments(service_id, service_name, starts_at, ends_at, client_name, status) values (7, 'Spa Pedicure', (${d} + time '15:40') at time zone '${tz}', (${d} + time '16:40') at time zone '${tz}', 'Late client', 'booked')`);
+  const t = (await asRole('anon', null, () => q(`select t from public.open_slots(1, '{}', ${d}, 1) t`))).map(r => r.t.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }));
+  ok(t.includes('4:45 PM') && !t.includes('4:30 PM') && t.at(-1) === '5:00 PM', `a client ending 4:40 → next start 4:45 (${t.slice(-3).join(', ')})`);
+  ok(t.includes('9:45 AM'), 'quarter-hour starts are offered');
 }
 
 await db.exec(`select private.tick()`);
