@@ -29,6 +29,8 @@ await db.exec(sql);
 // Supabase grants table privileges to anon/authenticated by default; RLS does the protecting
 await db.exec(`grant all on all tables in schema public to anon, authenticated; grant all on all sequences in schema public to anon, authenticated;`);
 await db.exec(`update private.config set owner_emails = array['sang@salonsang.com'];`);
+// the original tests use explicit open times only; weekly hours get their own test at the end
+await db.exec(`update public.settings set week_hours = '{}'`);
 await db.exec(sql); // idempotent re-run
 console.log('schema loaded twice ✓');
 
@@ -245,6 +247,23 @@ const rep1 = (await asRole('anon', null, () => q(`select v.name, v.minutes from 
 void rep1;
 const info2 = await asRole('anon', null, () => q('select public.booking_info() j'));
 ok(info2[0].j.services.some(v => v.name === 'Repair / fix · 1–2 nails' && v.minutes === 30 && !v.addon), 'Repair / fix (30 min) can be booked on its own');
+
+console.log('\nWeekly business hours (no open times needed)');
+{
+  await db.exec(`delete from public.openings; delete from public.time_off;`);
+  ok((await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 14) t`))).length === 0, 'with no hours at all, nothing is bookable');
+  await db.exec(`update public.settings set week_hours = '{"1":["09:30","17:00"],"2":["09:30","17:00"],"3":["09:30","17:00"],"4":["09:30","17:00"],"5":["09:30","17:00"],"6":["10:00","17:00"]}'`);
+  const wk = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 14) t`));
+  const dows = new Set(wk.map(r => new Date(r.t.toLocaleString('en-US', { timeZone: tz })).getDay()));
+  ok(wk.length > 40, `her normal week makes times bookable automatically (${wk.length} times over 2 weeks)`);
+  ok(!dows.has(0), 'Sundays stay closed');
+  const sat = wk.filter(r => new Date(r.t.toLocaleString('en-US', { timeZone: tz })).getDay() === 6).map(r => r.t.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }));
+  ok(!sat.length || sat[0] === '10:00 AM', 'Saturdays start at 10:00 (' + (sat[0] || 'none this window') + ')');
+  const wkDay = wk.find(r => new Date(r.t.toLocaleString('en-US', { timeZone: tz })).getDay() === 3);
+  await asRole('authenticated', 'sang@salonsang.com', () => q(`insert into public.time_off (starts_at, ends_at, note) values ($1::timestamptz - interval '1 minute', $1::timestamptz + interval '3 hours', 'Doctor')`, [wkDay.t]));
+  const after = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 14) t`));
+  ok(!after.some(r => r.t.getTime() === wkDay.t.getTime()), 'time off still blocks her normal hours');
+}
 
 await db.exec(`select private.tick()`);
 ok(true, 'daily tick runs');

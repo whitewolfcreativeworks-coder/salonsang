@@ -256,3 +256,10 @@ body.b-printing{overflow:hidden}
 .p-warn.stop{background:#ffe3e6;color:#9b1c2e;border:1.5px solid #f3a3ad;font-size:15px;line-height:1.45}
 .p-warn.stop .p-mini{display:block;margin-top:8px;background:#9b1c2e}
 .p-form button[type=submit]:disabled{opacity:.45}
+/* business hours */
+.p-wk{display:grid;grid-template-columns:96px 1fr auto 1fr;align-items:center;gap:6px}
+.p-wk .p-chk{margin:0}.p-wk i{font-style:normal;color:var(--ink-soft)}
+.p-form .p-wk input[type=time]{min-height:44px;padding:8px 10px}
+.p-wk.off input[type=time]{opacity:.35;pointer-events:none}
+.p-wk{grid-template-columns:74px 1fr auto 1fr;gap:5px}
+.p-form .p-wk input[type=time]{font-size:15px;padding:6px 6px;min-width:0}

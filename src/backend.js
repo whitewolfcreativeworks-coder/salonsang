@@ -137,7 +137,8 @@ const SERVICES = [
 function demoState() {
   const today = ymd();
   const s = {
-    settings: { id: 1, booking_open: true, tz: TZ, slot_step_min: 30, buffer_min: 10, min_notice_min: 120, max_days_ahead: 60, remind_hours_before: 4, remind_earliest: '08:00:00',
+    settings: { id: 1, booking_open: true, tz: TZ, slot_step_min: 30,
+      week_hours: { 1: ['09:30', '17:00'], 2: ['09:30', '17:00'], 3: ['09:30', '17:00'], 4: ['09:30', '17:00'], 5: ['09:30', '17:00'], 6: ['10:00', '17:00'] }, buffer_min: 10, min_notice_min: 120, max_days_ahead: 60, remind_hours_before: 4, remind_earliest: '08:00:00',
       confirm_template: "Hi {first}! 💅 You're all booked at Salon Sang: {service}, {when}. Sola Salon Studios, Suite 12 (440 W 6th Ave). Can't wait to see you! ✨ Need to change it? Just reply or call 530-648-4977 💖",
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
       reminder_template_pm: "Hi {first}! ✨ Just a sweet reminder: your {service} with Sang is today at {time}. Salon Sang · Sola Salon Studios, Suite 12. See you soon! 💅 Need to change it? Reply or call 530-648-4977 💖" },
@@ -159,15 +160,11 @@ function demoState() {
   sup('Acetone (gallon)', 'Tools', 0, 24, [40, 9]); sup('Shea butter lotion', 'Lotion', 3, 9, []);
   s.receipts.push({ id: ++s.seq, kind: 'receipt', day: addDays(today, -12), amount: 46.18, note: 'Sally Beauty: dip liquids and files', photo_path: null, created_at: new Date().toISOString() },
                   { id: ++s.seq, kind: 'note', day: addDays(today, -30), amount: null, note: 'Paid Sola suite rent for the month with a check', photo_path: null, created_at: new Date().toISOString() });
-  for (let i = 0; i < 14; i++) {
-    const d = addDays(today, i), wd = weekday(d);
-    if (wd === 0) continue;
-    s.openings.push({ id: ++s.seq, starts_at: at(d, wd === 6 ? '10:00' : '09:30').toISOString(), ends_at: at(d, '17:00').toISOString() });
-  }
+
   const mk = (day, time, name, phone, svc, mins, source = 'portal') => ({ id: ++s.seq, service_id: null, service_name: svc, addons: [], starts_at: at(day, time).toISOString(),
     ends_at: new Date(at(day, time).getTime() + mins * 60000).toISOString(), client_name: name, client_phone: phone, note: null, source, status: 'booked', texts_ok: true, send_confirmation: true, created_at: new Date().toISOString() });
   const firstOpen = s.openings[0] ? s.openings[0].starts_at.slice(0, 10) : today;
-  const d0 = ymd(new Date(s.openings[0]?.starts_at || Date.now()));
+  let d0 = addDays(today, 1); while (!s.settings.week_hours[weekday(d0)]) d0 = addDays(d0, 1);
   [mk(d0, '10:00', 'Jessica Rivera', '+15415550142', 'Gel Manicure', 60, 'web'), mk(d0, '13:30', 'Mai Tran', '+15415550111', 'Premier Gel Pedicure', 105),
    mk(d0, '16:00', 'Brooke Adams', '+15415550178', 'Polish Change', 20), mk(addDays(d0, 1), '11:00', 'Linh Nguyen', '+15415550133', 'Dipping full set', 90, 'web')]
     .forEach(a => { s.appointments.push(a); demoQueue(s, a, false); });
@@ -195,7 +192,11 @@ function demoQueue(s, a, confirm) {
 function demoFree(s, mins, from, to) {
   const out = [], step = s.settings.slot_step_min * 60e3, buf = s.settings.buffer_min * 60e3, len = mins * 60e3;
   const earliest = Date.now() + s.settings.min_notice_min * 60e3;
-  for (const o of s.openings) {
+  const wins = [...s.openings];
+  for (let d = ymd(new Date(from - 864e5)); at(d).getTime() <= to + 864e5; d = addDays(d, 1)) {
+    const h = s.settings.week_hours?.[weekday(d)]; if (h) wins.push({ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString() });
+  }
+  for (const o of wins) {
     const os = new Date(o.starts_at).getTime(), oe = new Date(o.ends_at).getTime();
     for (let t = os; t + len <= oe; t += step) {
       if (t < from || t > to || t < earliest) continue;

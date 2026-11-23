@@ -52,6 +52,10 @@ create table if not exists public.settings (
   updated_at           timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict do nothing;
+-- her normal week, set once: day of week (0 = Sunday … 6 = Saturday) → ["open", "close"]; a missing day = closed.
+-- Online booking follows these every week automatically (minus time off); 'openings' are only extra hours.
+alter table public.settings add column if not exists week_hours jsonb not null
+  default '{"1":["09:30","17:00"],"2":["09:30","17:00"],"3":["09:30","17:00"],"4":["09:30","17:00"],"5":["09:30","17:00"],"6":["10:00","17:00"]}';
 
 create table if not exists public.services (
   id        serial primary key,
@@ -254,13 +258,25 @@ drop function if exists private.free_starts(int, timestamptz, timestamptz);
 create or replace function private.free_starts(p_minutes int, p_from timestamptz, p_to timestamptz, p_ignore bigint default null)
 returns setof timestamptz language sql stable security definer set search_path = '' as $$
   with s as (select * from public.settings where id = 1),
+  days as (
+    select g::date as d from s, generate_series((p_from at time zone s.tz)::date - 1, (p_to at time zone s.tz)::date + 1, interval '1 day') g
+  ),
+  -- her normal weekly hours for each day, plus any extra hours she opened
+  allwin as (
+    select ((days.d + (s.week_hours -> extract(dow from days.d)::int::text ->> 0)::time) at time zone s.tz) as starts_at,
+           ((days.d + (s.week_hours -> extract(dow from days.d)::int::text ->> 1)::time) at time zone s.tz) as ends_at
+      from days, s
+     where jsonb_typeof(s.week_hours -> extract(dow from days.d)::int::text) = 'array'
+    union all
+    select starts_at, ends_at from public.openings
+  ),
   win as (
-    select greatest(o.starts_at, p_from) as a, least(o.ends_at, p_to + make_interval(mins => p_minutes)) as b, o.starts_at as o_start
-    from public.openings o
-    where o.ends_at > p_from and o.starts_at < p_to
+    select greatest(w.starts_at, p_from) as a, least(w.ends_at, p_to + make_interval(mins => p_minutes)) as b, w.starts_at as o_start
+    from allwin w
+    where w.ends_at > w.starts_at and w.ends_at > p_from and w.starts_at < p_to
   ),
   cand as (
-    -- starts aligned to the step, counted from the opening's own start (so 9:30 openings give 9:30, 10:00 …)
+    -- starts aligned to the step, counted from the window's own start (so 9:30 opens give 9:30, 10:00 …)
     select distinct g as t
     from win, s,
          generate_series(win.o_start, win.b - make_interval(mins => p_minutes), make_interval(mins => s.slot_step_min)) g
@@ -270,9 +286,8 @@ returns setof timestamptz language sql stable security definer set search_path =
   where c.t >= now() + make_interval(mins => s.min_notice_min)
     and c.t <  now() + make_interval(days => s.max_days_ahead)
     and c.t <= p_to
-    -- the whole service must fit inside one opening
-    and exists (select 1 from public.openings o
-                where o.starts_at <= c.t and o.ends_at >= c.t + make_interval(mins => p_minutes))
+    -- the whole visit must fit inside her hours
+    and exists (select 1 from allwin o where o.starts_at <= c.t and o.ends_at >= c.t + make_interval(mins => p_minutes))
     -- and must not touch an existing appointment (plus a little clean-up buffer)
     and not exists (select 1 from public.appointments ap
                     where ap.status = 'booked' and ap.id is distinct from p_ignore

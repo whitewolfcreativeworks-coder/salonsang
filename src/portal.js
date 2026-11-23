@@ -96,6 +96,8 @@ function render() {
      taxes: x => renderTaxes(x, ctx), supplies: x => renderSupplies(x, ctx), clients: x => renderClients(x, ctx) })[view](m).catch(fail);
 }
 const dayRange = d => [at(d), at(addDays(d, 1))];
+// her normal hours for a day (Settings → Business hours), as an opening-like window
+const weekWin = d => { const h = settings?.week_hours?.[String(weekday(d))]; return Array.isArray(h) && h[1] > h[0] ? [{ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString(), weekly: true }] : []; };
 
 // ============================================================ TODAY
 async function renderToday(m) {
@@ -178,14 +180,15 @@ async function renderCalendar(m) {
   const offToday = off.filter(x => new Date(x.starts_at) < at(addDays(calDay, 1)) && new Date(x.ends_at) > at(calDay));
   void start;
   const count = {}; allAppts.filter(a => a.status === 'booked').forEach(a => { const d = ymd(new Date(a.starts_at)); count[d] = (count[d] || 0) + 1; });
+  opens.unshift(...weekWin(calDay));
   const items = [...opens.map(o => ({ t: new Date(o.starts_at), o })), ...offToday.map(x => ({ t: new Date(x.starts_at), x })), ...appts.map(a => ({ t: new Date(a.starts_at), a }))].sort((x, y) => x.t - y.t || (x.o ? -1 : 1));
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Calendar</span></h1></header>
     <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : offDays.has(d) ? '<i class="off">🌙</i>' : '<i class="z"></i>'}</button>`).join('')}</div>
     <label class="p-jump">Jump to a date<input type="date" id="jump" value="${calDay}"></label>
     <h2 class="p-h2">${esc(relDay(calDay))}${relDay(calDay).startsWith('To') ? ' · ' + fmtDate(calDay, { month: 'short', day: 'numeric' }) : ''}</h2>
-    ${opens.length ? '' : `<p class="p-hint">No open times this day, so it isn't bookable online. <button class="p-link" id="openThis">Open this day</button></p>`}
-    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">Open ${fmtTime(i.o.starts_at)} – ${fmtTime(i.o.ends_at)}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
+    ${opens.length ? '' : `<p class="p-hint">Closed this day (your normal hours), so it isn't bookable online. <button class="p-link" id="openThis">Open it anyway</button></p>`}
+    <section class="p-list">${items.map(i => i.o ? `<div class="p-open">${i.o.weekly ? 'Open' : 'Extra hours'} ${fmtTime(new Date(i.o.starts_at))} – ${fmtTime(new Date(i.o.ends_at))}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
     <div class="p-row p-cal-acts"><button class="p-btn p-btn-soft" id="addHere">＋ Appointment</button><button class="p-btn p-btn-soft" id="offHere">🌙 Time off</button></div>`;
   $$('[data-day]', m).forEach(b => b.onclick = () => { calDay = b.dataset.day; render(); });
   $('#jump', m).onchange = e => { if (e.target.value) { calDay = e.target.value; render(); } };
@@ -292,12 +295,12 @@ async function renderHours(m) {
   const singleDay = !!hoursPrefill; hoursPrefill = null;
   m.innerHTML = `
     <button class="p-link p-back" type="button" id="toSettings">← Settings</button>
-    <header class="p-hello"><h1><span class="script">Open times</span></h1><p class="p-sub">Clients can only book online inside the times you open here.</p></header>
+    <header class="p-hello"><h1><span class="script">Extra hours</span></h1><p class="p-sub">Your normal week is set in <b>Settings → Business hours</b>. Use this only to open extra hours, like a Sunday or a late evening.</p></header>
     <form class="p-card p-form" id="openForm">
       <div class="p-row"><label>From<input type="time" name="from" value="09:30" step="900" required></label><label>Until<input type="time" name="to" value="${settingsCloseGuess(from)}" step="900" required></label></div>
-      <fieldset class="p-wd"><legend>Days</legend>${WD.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${singleDay ? (weekday(from) === i ? 'checked' : '') : (i ? 'checked' : '')}><span>${d}</span></label>`).join('')}</fieldset>
+      <fieldset class="p-wd"><legend>Days</legend>${WD.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${weekday(from) === i ? 'checked' : ''}><span>${d}</span></label>`).join('')}</fieldset>
       <div class="p-row"><label>Starting<input type="date" name="start" value="${from}" min="${t}" required></label>
-        <label>For<select name="weeks">${[[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [6, '6 weeks'], [8, '8 weeks'], [12, '12 weeks']].map(([v, l]) => `<option value="${v}" ${v === (singleDay ? 1 : 6) ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <label>For<select name="weeks">${[[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [6, '6 weeks'], [8, '8 weeks'], [12, '12 weeks']].map(([v, l]) => `<option value="${v}" ${v === 1 ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
       <p class="p-hint" id="openPreview"></p>
       <button class="p-btn" type="submit">Open these times ✨</button>
     </form>
@@ -422,7 +425,7 @@ function editAppt(a, day = ymd(), pre = null) {
       const u = $('#useNext'); if (u) u.onclick = () => { f.time.value = hm(next); check().catch(() => {}); };
       return;
     }
-    const inside = opens.some(o => new Date(o.starts_at) <= s && new Date(o.ends_at) >= e);
+    const inside = [...weekWin(f.day.value), ...opens].some(o => new Date(o.starts_at) <= s && new Date(o.ends_at) >= e);
     w.hidden = inside; w.textContent = inside ? '' : 'Outside your open times (that’s okay)';
   };
   f.day.onchange = f.time.onchange = f.len.onchange = () => check().catch(() => {});
@@ -463,7 +466,15 @@ async function renderSettings(m) {
   const sb = A().supabaseUrl;
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Settings</span></h1></header>
-    <button class="b-big" id="toHours" type="button"><span>🕘</span><em>Open times<small>when clients can book online</small></em></button>
+    <form class="p-card p-form" id="weekForm">
+      <h3>🕘 Business hours</h3>
+      <p class="p-hint">Clients can book inside these every week, automatically. For days off or appointments, use <b>Time off</b>.</p>
+      ${[1, 2, 3, 4, 5, 6, 0].map(d => { const h = s.week_hours?.[String(d)]; const on = Array.isArray(h);
+        return `<div class="p-wk${on ? '' : ' off'}" data-wd="${d}"><label class="p-chk"><input type="checkbox" name="on${d}" ${on ? 'checked' : ''}><span>${WD[d]}</span></label>
+          <input type="time" name="a${d}" step="900" value="${on ? h[0] : '09:30'}" aria-label="${WD[d]} opens"><i>–</i><input type="time" name="b${d}" step="900" value="${on ? h[1] : '17:00'}" aria-label="${WD[d]} closes"></div>`; }).join('')}
+      <button class="p-btn" type="submit">Save hours ✓</button>
+      <button class="p-link" type="button" id="toHours">Open extra hours on a day you're normally closed</button>
+    </form>
     <button class="b-big" id="toOff" type="button"><span>🌙</span><em>Time off<small>days off, appointments, games</small></em></button>
     <button class="b-big" id="doBackup" type="button"><span>💾</span><em>Download a backup<small>everything, saved to your phone</small></em></button>
     <form class="p-card p-form" id="setForm">
@@ -503,6 +514,19 @@ async function renderSettings(m) {
     <button class="p-btn p-btn-soft" id="signout">Sign out</button>`;
   const f = $('#setForm', m);
   $('#toHours', m).onclick = () => go('hours');
+  const wf = $('#weekForm', m);
+  $$('.p-wk input[type=checkbox]', wf).forEach(c => c.onchange = () => c.closest('.p-wk').classList.toggle('off', !c.checked));
+  wf.onsubmit = async e => {
+    e.preventDefault();
+    const wh = {};
+    for (const d of [0, 1, 2, 3, 4, 5, 6]) {
+      if (!wf['on' + d].checked) continue;
+      const a = wf['a' + d].value, b = wf['b' + d].value;
+      if (!a || !b || b <= a) return toast(`${WD[d]}: closing time needs to be after opening`);
+      wh[String(d)] = [a, b];
+    }
+    try { settings = await A().saveSettings({ week_hours: wh }); toast('Hours saved ✓ Online booking follows them now'); } catch (er) { fail(er); }
+  };
   $('#toOff', m).onclick = () => timeOffSheet(ymd());
   $('#doBackup', m).onclick = () => downloadBackup();
   const prevAll = async () => { for (const p of $$('[data-prev]', m)) {
