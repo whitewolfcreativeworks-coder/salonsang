@@ -38,7 +38,7 @@ create table if not exists public.settings (
   booking_open         boolean not null default true,
   tz                   text not null default 'America/Los_Angeles',
   slot_step_min        int  not null default 30  check (slot_step_min between 5 and 120),
-  buffer_min           int  not null default 10  check (buffer_min between 0 and 120),
+  buffer_min           int  not null default 0   check (buffer_min between 0 and 120),
   min_notice_min       int  not null default 120 check (min_notice_min between 0 and 10080),
   max_days_ahead       int  not null default 60  check (max_days_ahead between 1 and 365),
   remind_hours_before  numeric not null default 4 check (remind_hours_before between 0.5 and 48),

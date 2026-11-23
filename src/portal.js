@@ -415,7 +415,7 @@ function editAppt(a, day = ymd(), pre = null) {
     w.classList.toggle('stop', blocked);
     if (blocked) {
       // next time the whole visit fits (after her break), the same day
-      const buf = (settings?.buffer_min ?? 10) * 60000; let t = s.getTime();
+      const buf = (settings?.buffer_min ?? 0) * 60000; let t = s.getTime();
       for (const x of booked) { const xs = new Date(x.starts_at).getTime(), xe = new Date(x.ends_at).getTime(); if (xs < t + len * 60000 + buf && xe + buf > t) t = xe + buf; }
       const next = new Date(Math.ceil(t / 300000) * 300000);
       const sameDay = ymd(next) === f.day.value;
