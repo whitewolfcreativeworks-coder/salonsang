@@ -463,3 +463,4 @@ html.can-book .bb-text{background:#fff;border:2px solid var(--pink-soft);color:v
 .bk-visit .bk-label span{font-weight:600;color:var(--pink-deep);font-size:14px}
 .bk-tip{font-size:13px;color:var(--ink-soft);margin:10px 2px 0}
 .bk-svc .m b{font-weight:600}.bk-added{color:var(--pink-deep)}.bk-addit{color:var(--pink)}
+.bk-demo[hidden]{display:none}
