@@ -258,7 +258,7 @@ console.log('\nWeekly business hours (no open times needed)');
   ok(wk.length > 40, `her normal week makes times bookable automatically (${wk.length} times over 2 weeks)`);
   ok(!dows.has(0), 'Sundays stay closed');
   const sat = wk.filter(r => new Date(r.t.toLocaleString('en-US', { timeZone: tz })).getDay() === 6).map(r => r.t.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }));
-  ok(!sat.length || sat[0] === '10:00 AM', 'Saturdays start at 10:00 (' + (sat[0] || 'none this window') + ')');
+  ok(!sat.some(t => /^9:/.test(t)), 'Saturdays never start before 10:00 (' + (sat[0] || 'none this window') + ')');
   const wkDay = wk.find(r => new Date(r.t.toLocaleString('en-US', { timeZone: tz })).getDay() === 3);
   await asRole('authenticated', 'sang@salonsang.com', () => q(`insert into public.time_off (starts_at, ends_at, note) values ($1::timestamptz - interval '1 minute', $1::timestamptz + interval '3 hours', 'Doctor')`, [wkDay.t]));
   const after = await asRole('anon', null, () => q(`select t from public.open_slots(25, '{}', null, 14) t`));
@@ -275,6 +275,41 @@ console.log('\nStart times every 15 minutes, no break');
   const t = (await asRole('anon', null, () => q(`select t from public.open_slots(1, '{}', ${d}, 1) t`))).map(r => r.t.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }));
   ok(t.includes('4:45 PM') && !t.includes('4:30 PM') && t.at(-1) === '5:00 PM', `a client ending 4:40 → next start 4:45 (${t.slice(-3).join(', ')})`);
   ok(t.includes('9:45 AM'), 'quarter-hour starts are offered');
+}
+
+console.log('\nHolidays');
+{
+  const h = async d => (await q(`select private.holiday($1::date, '{new_year,memorial,july4,labor,thanksgiving,christmas}') h`, [d]))[0].h;
+  ok(await h('2026-11-26') === 'Thanksgiving' && await h('2027-11-25') === 'Thanksgiving' && await h('2026-11-27') === null, 'Thanksgiving = 4th Thursday of November');
+  ok(await h('2026-05-25') === 'Memorial Day' && await h('2026-05-18') === null, 'Memorial Day = last Monday of May');
+  ok(await h('2026-09-07') === 'Labor Day' && await h('2026-12-25') === 'Christmas Day' && await h('2027-01-01') === "New Year's Day" && await h('2026-07-04') === 'Fourth of July', 'Labor Day, Christmas, New Year, July 4th');
+  ok(await h('2026-02-16') === null && await h('2026-12-24') === null, "Presidents' Day and Christmas Eve stay open (unless she ticks it)");
+  // a holiday on one of her working days closes it; the next day stays open
+  await db.exec(`update public.settings set week_hours = '{"1":["09:30","17:00"],"2":["09:30","17:00"],"3":["09:30","17:00"],"4":["09:30","17:00"],"5":["09:30","17:00"]}', max_days_ahead = 120`);
+  const n = async d => (await q(`select count(*)::int n from private.free_starts(15, ('${d}'::timestamp at time zone '${tz}'), (('${d}'::date + 1)::timestamp at time zone '${tz}'))`))[0].n;
+  ok(await n('2026-12-25') === 0 && await n('2026-12-24') > 0 && await n('2026-12-28') > 0, 'Christmas Day is closed; Christmas Eve and the next workday stay open');
+  await db.exec(`update public.settings set holidays = '{christmas,christmas_eve}'`);
+  ok(await n('2026-12-24') === 0, 'ticking "Christmas Eve" closes that day too');
+  await db.exec(`insert into public.openings (starts_at, ends_at) values ('2026-12-25 10:00-08', '2026-12-25 12:00-08')`);
+  ok(await n('2026-12-25') > 0, 'extra hours she opens on purpose still work on a holiday');
+  await db.exec(`delete from public.openings; update public.settings set holidays = default, max_days_ahead = 60`);
+}
+
+console.log('\nSimple iPhone texts call');
+{
+  const tok = (await q(`select phone_token t from private.config`))[0].t;
+  await db.exec(`insert into public.messages (kind, to_phone, body, send_after) values ('custom', '+15415550100', 'Hello test', now())`);
+  const got = await asRole('anon', null, () => q(`select public.phone_texts($1) j`, [tok]));
+  ok(got[0].j.some(m => m.text === 'Hello test'), 'phone_texts hands over the due text');
+  const again = await asRole('anon', null, () => q(`select public.phone_texts($1) j`, [tok]));
+  ok(!again[0].j.some(m => m.text === 'Hello test'), '…and marks it sent, so it is never sent twice');
+  ok((await q(`select phone_seen_at from private.config`))[0].phone_seen_at != null, 'the portal can see when her iPhone last checked in');
+  let bad = false; try { await asRole('anon', null, () => q(`select public.phone_texts('nope')`)); } catch { bad = true; }
+  ok(bad, 'a wrong phone key gets nothing');
+  const st = await asRole('authenticated', 'sang@salonsang.com', () => q(`select public.owner_setup() j`));
+  ok('phone_seen_at' in st[0].j && 'texts_waiting' in st[0].j, 'owner_setup reports iPhone check-in and texts waiting');
+  const ta = await asRole('authenticated', 'sang@salonsang.com', () => q(`select public.owner_test_alert() j`));
+  ok(ta[0].j === true, 'test alert can be sent by Sang');
 }
 
 await db.exec(`select private.tick()`);

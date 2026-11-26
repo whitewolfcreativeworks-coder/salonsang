@@ -31,6 +31,7 @@ create table if not exists private.config (
   last_summary  date
 );
 insert into private.config (id) values (1) on conflict do nothing;
+alter table private.config add column if not exists phone_seen_at timestamptz;   -- last time her iPhone asked for texts
 
 -- ---------------------------------------------------------------- public tables
 create table if not exists public.settings (
@@ -57,6 +58,32 @@ insert into public.settings (id) values (1) on conflict do nothing;
 -- Online booking follows these every week automatically (minus time off); 'openings' are only extra hours.
 alter table public.settings add column if not exists week_hours jsonb not null
   default '{"1":["09:30","17:00"],"2":["09:30","17:00"],"3":["09:30","17:00"],"4":["09:30","17:00"],"5":["09:30","17:00"],"6":["10:00","17:00"]}';
+-- holidays she takes off: her normal hours don't open on these days (extra hours she opens on purpose still do)
+alter table public.settings add column if not exists holidays text[] not null
+  default '{new_year,memorial,july4,labor,thanksgiving,christmas}';
+
+-- which of her holidays (if any) a date is: returns its name, or null
+create or replace function private.holiday(p_d date, p_keys text[]) returns text
+language plpgsql immutable set search_path = '' as $$
+declare
+  y int := extract(year from p_d); m int := extract(month from p_d); dd int := extract(day from p_d);
+  dow int := extract(dow from p_d);                       -- 0 = Sunday
+  nth int := (dd - 1) / 7 + 1;                            -- 1st, 2nd … of that weekday in the month
+  last_of boolean := (p_d + 7) > (date_trunc('month', p_d) + interval '1 month' - interval '1 day')::date;
+  thx date := make_date(y, 11, 1) + ((4 - extract(dow from make_date(y, 11, 1))::int + 7) % 7) + 21;   -- 4th Thursday
+begin
+  if p_keys is null then return null; end if;
+  if 'new_year'     = any(p_keys) and m = 1  and dd = 1 then return 'New Year''s Day'; end if;
+  if 'memorial'     = any(p_keys) and m = 5  and dow = 1 and last_of then return 'Memorial Day'; end if;
+  if 'july4'        = any(p_keys) and m = 7  and dd = 4 then return 'Fourth of July'; end if;
+  if 'labor'        = any(p_keys) and m = 9  and dow = 1 and nth = 1 then return 'Labor Day'; end if;
+  if 'thanksgiving' = any(p_keys) and p_d = thx then return 'Thanksgiving'; end if;
+  if 'black_friday' = any(p_keys) and p_d = thx + 1 then return 'Day after Thanksgiving'; end if;
+  if 'christmas_eve'= any(p_keys) and m = 12 and dd = 24 then return 'Christmas Eve'; end if;
+  if 'christmas'    = any(p_keys) and m = 12 and dd = 25 then return 'Christmas Day'; end if;
+  if 'nye'          = any(p_keys) and m = 12 and dd = 31 then return 'New Year''s Eve'; end if;
+  return null;
+end $$;
 
 create table if not exists public.services (
   id        serial primary key,
@@ -268,6 +295,7 @@ returns setof timestamptz language sql stable security definer set search_path =
            ((days.d + (s.week_hours -> extract(dow from days.d)::int::text ->> 1)::time) at time zone s.tz) as ends_at
       from days, s
      where jsonb_typeof(s.week_hours -> extract(dow from days.d)::int::text) = 'array'
+       and private.holiday(days.d, s.holidays) is null          -- closed on her holidays
     union all
     select starts_at, ends_at from public.openings
   ),
@@ -558,6 +586,7 @@ begin
   if p_token is null or p_token <> (select phone_token from private.config where id = 1) then
     raise exception 'not allowed' using errcode = '42501';
   end if;
+  update private.config set phone_seen_at = now() where id = 1;
   -- reminders for appointments that were cancelled, finished or already started are skipped
   update public.messages m set status = 'skipped'
    from public.appointments a
@@ -587,6 +616,27 @@ begin
   return found;
 end $$;
 
+-- the simple version for the Shortcut: hands over the texts that are due AND marks them sent,
+-- so the Shortcut only needs "get texts → send each one" (no second call back)
+create or replace function public.phone_texts(p_token text) returns json
+language plpgsql volatile security definer set search_path = '' as $$
+declare out json;
+begin
+  out := public.phone_outbox(p_token);
+  update public.messages set status = 'sent', sent_at = now()
+   where status = 'pending' and id in (select (e ->> 'id')::bigint from json_array_elements(out) e);
+  return out;
+end $$;
+
+-- "Send me a test alert" button in the portal
+create or replace function public.owner_test_alert() returns boolean
+language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if not private.is_owner() then raise exception 'not allowed' using errcode = '42501'; end if;
+  perform private.alert('Test alert 🔔', 'Your booking alerts are working 💖');
+  return true;
+end $$;
+
 -- ---------------------------------------------------------------- PORTAL helpers (owner only)
 -- every client: from her appointments plus anyone she added by hand, with visits, last and next visit
 create or replace function public.owner_client_list()
@@ -612,7 +662,8 @@ language plpgsql stable security definer set search_path = '' as $$
 declare c private.config := (select x from private.config x where id = 1);
 begin
   if not private.is_owner() then raise exception 'not allowed' using errcode = '42501'; end if;
-  return json_build_object('phone_token', c.phone_token, 'ntfy_topic', c.ntfy_topic);
+  return json_build_object('phone_token', c.phone_token, 'ntfy_topic', c.ntfy_topic, 'phone_seen_at', c.phone_seen_at,
+    'texts_waiting', (select count(*) from public.messages where status = 'pending' and send_after <= now()));
 end $$;
 
 -- the text a message will say if sent right now (for the portal's one-tap "send from my phone")
@@ -718,11 +769,11 @@ revoke all on all tables in schema private from anon, authenticated;
 revoke execute on all functions in schema private from public, anon;
 grant execute on function private.is_owner() to authenticated;
 
-revoke execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() from public, anon;
-grant  execute on function public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() to authenticated;
+revoke execute on function public.owner_test_alert(), public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() from public, anon;
+grant  execute on function public.owner_test_alert(), public.owner_setup(), public.message_preview(bigint), public.template_preview(text, timestamptz), public.owner_clients(text), public.owner_client_list() to authenticated;
 grant  execute on function public.booking_info(), public.open_slots(int, int[], date, int),
                            public.book(int, timestamptz, text, text, text, boolean, int[]),
-                           public.phone_outbox(text), public.phone_sent(text, bigint), public.is_owner(),
+                           public.phone_outbox(text), public.phone_texts(text), public.phone_sent(text, bigint), public.is_owner(),
                            public.my_appt(text), public.my_slots(text, date, int), public.my_move(text, timestamptz), public.my_cancel(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------- the menu (minutes are first guesses; Sang can edit them in the portal)

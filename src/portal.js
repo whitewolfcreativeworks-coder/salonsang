@@ -2,6 +2,7 @@
 import { api, isDemo } from './backend.js';
 import { renderTaxes, renderSupplies } from './books.js';
 import { renderClients } from './clients.js';
+import { HOLIDAYS, DEFAULT_HOLIDAYS, holidayName } from './lib/holidays.js';
 import { ymd, hm, at, addDays, weekday, fmtTime, fmtDate, relDay, minutes, prettyPhone, normPhone, smsLink } from './lib/time.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -97,7 +98,8 @@ function render() {
 }
 const dayRange = d => [at(d), at(addDays(d, 1))];
 // her normal hours for a day (Settings → Business hours), as an opening-like window
-const weekWin = d => { const h = settings?.week_hours?.[String(weekday(d))]; return Array.isArray(h) && h[1] > h[0] ? [{ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString(), weekly: true }] : []; };
+const holiday = d => holidayName(d, settings?.holidays ?? DEFAULT_HOLIDAYS);
+const weekWin = d => { if (holiday(d)) return []; const h = settings?.week_hours?.[String(weekday(d))]; return Array.isArray(h) && h[1] > h[0] ? [{ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString(), weekly: true }] : []; };
 
 // ============================================================ TODAY
 async function renderToday(m) {
@@ -108,6 +110,9 @@ async function renderToday(m) {
     A().messages(at(addDays(t, -2)), at(addDays(t, 2))),
     A().timeOff(...dayRange(t)).catch(() => [])
   ]);
+  const setup = await A().setup().catch(() => null);
+  const seen = setup?.phone_seen_at ? new Date(setup.phone_seen_at) : null;
+  const phoneOff = setup && (!seen || Date.now() - seen > 26 * 3600e3);
   const live = appts.filter(a => a.status !== 'cancelled');
   const hour = +hm(new Date()).slice(0, 2);
   const hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -117,6 +122,8 @@ async function renderToday(m) {
     <header class="p-hello"><p class="p-kicker">${fmtDate(t)}</p><h1><span class="script">${hello},</span> Sang</h1>
       <p class="p-sub">${live.length ? `${live.length} ${live.length === 1 ? 'appointment' : 'appointments'} today` : 'No appointments today. Rest those hands 💖'}${due.length ? ` · <b>${due.length} text${due.length > 1 ? 's' : ''} ready to go</b>` : ''}</p></header>
     <section class="p-list">${[...off.map(x => ({ t: new Date(x.starts_at), x })), ...live.map(a => ({ t: new Date(a.starts_at), a }))].sort((p, q) => p.t - q.t).map(i => i.x ? offCard(i.x) : apptCard(i.a)).join('')}</section>
+    ${phoneOff ? `<a class="p-phone-off" href="setup.html${isDemo() ? '?demo' : ''}#texts">📱 <span><b>Client texts aren't going out.</b> ${seen ? `Your iPhone last checked for texts ${esc(relDay(ymd(seen)).toLowerCase())}.` : `Your iPhone isn't set up to send them yet.`} Tap here to set it up (about 5 minutes).</span></a>` : ''}
+    ${holiday(t) ? `<p class="p-hint">🎉 Happy ${esc(holiday(t))}! You're closed today for online booking.</p>` : ''}
     <button class="b-big p-off-btn" id="takeOff" type="button"><span>🌙</span><em>Time off<small>days off, appointments, the kids' games…</small></em></button>
     ${backupDue() ? `<button class="p-backup-due" id="backupNow" type="button">💾 It's been a while since your last backup. <b>Save one now</b></button>` : ''}
     ${todayMsgs.length ? `<h2 class="p-h2">Texts today</h2><section class="p-card p-msgs">${todayMsgs.map(msgRow).join('')}</section>
@@ -184,10 +191,11 @@ async function renderCalendar(m) {
   const items = [...opens.map(o => ({ t: new Date(o.starts_at), o })), ...offToday.map(x => ({ t: new Date(x.starts_at), x })), ...appts.map(a => ({ t: new Date(a.starts_at), a }))].sort((x, y) => x.t - y.t || (x.o ? -1 : 1));
   m.innerHTML = `
     <header class="p-hello"><h1><span class="script">Calendar</span></h1></header>
-    <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : offDays.has(d) ? '<i class="off">🌙</i>' : '<i class="z"></i>'}</button>`).join('')}</div>
+    <div class="p-days">${days.map(d => `<button class="p-day${d === calDay ? ' on' : ''}${d === t ? ' today' : ''}" data-day="${d}"><span>${fmtDate(d, { weekday: 'short' })}</span><b>${fmtDate(d, { day: 'numeric' })}</b>${count[d] ? `<i>${count[d]}</i>` : offDays.has(d) ? '<i class="off">🌙</i>' : holiday(d) ? '<i class="off">🎉</i>' : '<i class="z"></i>'}</button>`).join('')}</div>
     <label class="p-jump">Jump to a date<input type="date" id="jump" value="${calDay}"></label>
     <h2 class="p-h2">${esc(relDay(calDay))}${relDay(calDay).startsWith('To') ? ' · ' + fmtDate(calDay, { month: 'short', day: 'numeric' }) : ''}</h2>
-    ${opens.length ? '' : `<p class="p-hint">Closed this day (your normal hours), so it isn't bookable online. <button class="p-link" id="openThis">Open it anyway</button></p>`}
+    ${holiday(calDay) ? `<p class="p-holiday">🎉 ${esc(holiday(calDay))}: your day off, so it isn't bookable online. <button class="p-link" id="openThis">Open it anyway</button></p>` : ''}
+    ${opens.length || holiday(calDay) ? '' : `<p class="p-hint">Closed this day (your normal hours), so it isn't bookable online. <button class="p-link" id="openThis">Open it anyway</button></p>`}
     <section class="p-list">${items.map(i => i.o ? `<div class="p-open">${i.o.weekly ? 'Booking' : 'Extra hours'} ${fmtTime(new Date(i.o.starts_at))} · last start ${fmtTime(new Date(i.o.ends_at))}</div>` : i.x ? offCard(i.x) : apptCard(i.a)).join('') || ''}</section>
     <div class="p-row p-cal-acts"><button class="p-btn p-btn-soft" id="addHere">＋ Appointment</button><button class="p-btn p-btn-soft" id="offHere">🌙 Time off</button></div>`;
   $$('[data-day]', m).forEach(b => b.onclick = () => { calDay = b.dataset.day; render(); });
@@ -476,6 +484,11 @@ async function renderSettings(m) {
       <button class="p-btn" type="submit">Save hours ✓</button>
       <button class="p-link" type="button" id="toHours">Open extra hours on a day you're normally closed</button>
     </form>
+    <form class="p-card p-form" id="holForm">
+      <h3>🎉 Holidays off</h3>
+      <p class="p-hint">Online booking stays closed on these days. Tap to change; it saves by itself.</p>
+      <div class="p-hols">${HOLIDAYS.map(([k, l]) => `<label class="p-chk"><input type="checkbox" name="${k}" ${(s.holidays ?? DEFAULT_HOLIDAYS).includes(k) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+    </form>
     <button class="b-big" id="toOff" type="button"><span>🌙</span><em>Time off<small>days off, appointments, games</small></em></button>
     <button class="b-big" id="doBackup" type="button"><span>💾</span><em>Download a backup<small>everything, saved to your phone</small></em></button>
     <form class="p-card p-form" id="setForm">
@@ -505,16 +518,25 @@ async function renderSettings(m) {
     <h2 class="p-h2">Your iPhone</h2>
     <section class="p-card p-setup">
       <p><b>Texts to clients</b> go out from your own number through the “Salon Sang texts” shortcut. It needs these two things:</p>
-      <label>Shortcut address<input readonly value="${esc(sb)}/rest/v1/rpc/phone_outbox"></label>
+      <p class="p-status">${setup.phone_seen_at ? `✅ Your iPhone last checked for texts <b>${esc(relDay(ymd(new Date(setup.phone_seen_at))).toLowerCase())} at ${fmtTime(new Date(setup.phone_seen_at))}</b>` : '⚠️ Your iPhone has <b>never</b> checked for texts yet'}${setup.texts_waiting ? ` · ${setup.texts_waiting} waiting` : ''}</p>
+      <label>Shortcut address<input readonly value="${esc(sb)}/rest/v1/rpc/phone_texts?apikey=${esc(A().anonKey)}"></label>
       <label>Your secret phone key<input readonly value="${esc(setup.phone_token || '')}"></label>
-      <label>Site key (for the apikey header)<input readonly value="${esc(A().anonKey)}"></label>
       <p><b>New-booking alerts</b> come through the free <b>ntfy</b> app. Subscribe to this topic:</p>
       <label>Alert topic<input readonly value="${esc(setup.ntfy_topic || '')}"></label>
+      <button class="p-btn p-btn-soft" type="button" id="testAlert">🔔 Send me a test alert</button>
       <p class="p-hint">Tap any box to copy it. Step-by-step: <a href="setup.html${isDemo() ? '?demo' : ''}">iPhone setup guide</a>. Keep your phone key private.</p>
     </section>
     <button class="p-btn p-btn-soft" id="signout">Sign out</button>`;
   const f = $('#setForm', m);
   $('#toHours', m).onclick = () => go('hours');
+  const hf = $('#holForm', m);
+  $$('input', hf).forEach(c => c.onchange = async () => {
+    const holidays = HOLIDAYS.map(([k]) => k).filter(k => hf[k].checked);
+    try { settings = await A().saveSettings({ holidays }); toast('Holidays saved ✓'); } catch (er) { fail(er); }
+  });
+  $('#testAlert', m).onclick = async () => {
+    try { await A().testAlert(); toast('Sent! It should pop up on your phone in a few seconds 🔔', 4000); } catch (er) { fail(er); }
+  };
   const wf = $('#weekForm', m);
   $$('.p-wk input[type=checkbox]', wf).forEach(c => c.onchange = () => c.closest('.p-wk').classList.toggle('off', !c.checked));
   wf.onsubmit = async e => {

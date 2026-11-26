@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Great+Vibes&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../css/portal.css?v=8c40e432a1">
+<link rel="stylesheet" href="../css/portal.css?v=eacaa1e6f5">
 <style>
   .guide{max-width:640px;margin:0 auto;padding:28px 18px 60px}
   .guide h2{font:600 26px var(--serif);margin:30px 0 8px}
@@ -37,33 +37,29 @@
 
   <h2>2 · New-booking alerts (free ntfy app)</h2>
   <div class="p-card">
-    <div class="step"><b class="n">1</b><div>Install <b>ntfy</b> from the App Store (free, by Philipp Heckel). Allow notifications.</div></div>
+    <div class="step"><b class="n">1</b><div>Install <b>ntfy</b> from the App Store (free, by Philipp Heckel). Open it once and tap <b>Allow</b> for notifications.</div></div>
     <div class="step"><b class="n">2</b><div>In the portal, open <b>Settings → Your iPhone</b> and tap <b>Alert topic</b> to copy it.</div></div>
-    <div class="step"><b class="n">3</b><div>In ntfy tap <b>＋</b>, paste the topic, keep the server <code>ntfy.sh</code>, tap <b>Subscribe</b>.</div></div>
-    <div class="step"><b class="n">4</b><div>That's it: every online booking pings you instantly, and you get a little good-morning summary of your day ☀️</div></div>
+    <div class="step"><b class="n">3</b><div>In ntfy tap <b>＋</b>, paste the topic, leave “Use another server” <b>off</b>, tap <b>Subscribe</b>.</div></div>
+    <div class="step"><b class="n">4</b><div>Back in the portal, tap <b>🔔 Send me a test alert</b>. A notification should pop up within a few seconds. If it does, every online booking will ping you too 💖</div></div>
   </div>
 
-  <h2>3 · Client texts from your number (Shortcuts)</h2>
-  <p class="p-hint">This shortcut asks the portal “any texts due?”, sends each one from your Messages, and marks it sent. You'll build it once (about 10 minutes), then add hourly automations so it runs by itself.</p>
+  <h2 id="texts">3 · Client texts from your number (Shortcuts)</h2>
+  <p class="p-hint">A tiny shortcut asks the portal “any texts due?” and sends each one from your own Messages. Build it once (about 5 minutes), then it runs by itself every hour.</p>
   <div class="p-card">
-    <p><b>A. Build the shortcut</b> in the <b>Shortcuts</b> app → <b>＋</b> → name it <b>Salon Sang texts</b>:</p>
-    <div class="step"><b class="n">1</b><div>Add <b>Get Contents of URL</b>. URL: the <b>Shortcut address</b> from portal Settings. Tap <b>Show More</b>:
-      Method <b>POST</b>. Headers: <code>apikey</code> = the <b>Site key</b>, <code>Content-Type</code> = <code>application/json</code>.
-      Request Body <b>JSON</b>: add a Text field <code>p_token</code> = your <b>secret phone key</b>.</div></div>
-    <div class="step"><b class="n">2</b><div>Add <b>Repeat with Each</b> (item in <i>Contents of URL</i>).</div></div>
-    <div class="step"><b class="n">3</b><div>Inside the repeat, add <b>Get Dictionary Value</b> → Value for <code>text</code> in <i>Repeat Item</i>.</div></div>
-    <div class="step"><b class="n">4</b><div>Add <b>Get Dictionary Value</b> → Value for <code>phone</code> in <i>Repeat Item</i>.</div></div>
-    <div class="step"><b class="n">5</b><div>Add <b>Send Message</b>: message = the <i>text</i> value, recipient = the <i>phone</i> value. Tap the arrow and turn <b>Show When Run</b> off.</div></div>
-    <div class="step"><b class="n">6</b><div>Add <b>Get Dictionary Value</b> → Value for <code>id</code> in <i>Repeat Item</i>.</div></div>
-    <div class="step"><b class="n">7</b><div>Add <b>Get Contents of URL</b> with the same address but ending in <code>phone_sent</code> instead of <code>phone_outbox</code>, same headers, Method POST,
-      JSON body: <code>p_token</code> = your key, and a <b>Number</b> field <code>p_id</code> = the <i>id</i> value.</div></div>
-    <div class="step"><b class="n">8</b><div>Tap ▶︎ once to test. With nothing due it simply finishes quietly.</div></div>
+    <p><b>A. Build the shortcut.</b> Open the <b>Shortcuts</b> app → <b>＋</b> (top right). Tap the name at the top and call it <b>Salon Sang texts</b>.</p>
+    <div class="step"><b class="n">1</b><div>Search for <b>Get Contents of URL</b> and add it. Tap the blue <b>URL</b> and paste the <b>Shortcut address</b> (portal → Settings → Your iPhone → tap it to copy).</div></div>
+    <div class="step"><b class="n">2</b><div>Tap the <b>›</b> arrow on that action. Change <b>Method</b> to <b>POST</b>. Under <b>Request Body</b> pick <b>JSON</b>, tap <b>Add new field → Text</b>. Key: <code>p_token</code>. Value: paste <b>Your secret phone key</b>.</div></div>
+    <div class="step"><b class="n">3</b><div>Add <b>Repeat with Each</b>. It fills in <i>Contents of URL</i> by itself.</div></div>
+    <div class="step"><b class="n">4</b><div>Inside the repeat, add <b>Get Dictionary Value</b>. Tap <b>Key</b>, type <code>text</code>. (It reads “Get Value for text in Repeat Item”.)</div></div>
+    <div class="step"><b class="n">5</b><div>Add another <b>Get Dictionary Value</b> right under it. Key: <code>phone</code>. Tap its blue <i>Dictionary</i> and choose <b>Repeat Item</b>.</div></div>
+    <div class="step"><b class="n">6</b><div>Add <b>Send Message</b>. Message: tap and choose the first <i>Dictionary Value</i> (the text). Recipients: choose the second <i>Dictionary Value</i> (the phone). Tap the <b>›</b> arrow and turn <b>Show When Run</b> off.</div></div>
+    <div class="step"><b class="n">7</b><div>Tap <b>Done</b>, then tap the shortcut once to test. With nothing due it just finishes quietly. Now the portal's Settings shows “✅ Your iPhone last checked for texts today”.</div></div>
   </div>
   <div class="p-card">
     <p><b>B. Make it run by itself</b>, every hour while you work:</p>
-    <div class="step"><b class="n">1</b><div>Shortcuts → <b>Automation</b> → <b>＋</b> → <b>Time of Day</b> → <b>8:00 AM</b>, <b>Daily</b>.</div></div>
-    <div class="step"><b class="n">2</b><div>Choose <b>Run Immediately</b> (and turn off <b>Notify When Run</b>), then pick <b>Salon Sang texts</b>.</div></div>
-    <div class="step"><b class="n">3</b><div>Repeat for 9 AM, 10 AM … through 7 PM (12 little automations). Reminders go out about 4 hours before each appointment, never before 8 AM.</div></div>
+    <div class="step"><b class="n">1</b><div>Shortcuts → <b>Automation</b> (bottom) → <b>＋</b> → <b>Time of Day</b> → <b>8:00 AM</b>, <b>Daily</b>.</div></div>
+    <div class="step"><b class="n">2</b><div>Choose <b>Run Immediately</b> and turn off <b>Notify When Run</b>. Tap <b>Next</b> and pick <b>Salon Sang texts</b>.</div></div>
+    <div class="step"><b class="n">3</b><div>Do the same for 9 AM, 10 AM … through 7 PM (12 little automations). Reminders go out about 4 hours before each appointment, never before 8 AM.</div></div>
   </div>
   <p class="note">Keep your phone on and charged during the day 💡 If it ever misses a text, the portal's <b>Today</b> screen shows a <b>Send</b> button next to anything waiting, so you can send it with one tap.</p>
   <p class="p-hint"><a href="./">← Back to the portal</a></p>

@@ -1,3 +1,4 @@
+import { holidayName, DEFAULT_HOLIDAYS } from './lib/holidays.js';
 // One small interface for the website's booking flow and Sang's portal.
 //  • live: Supabase (database rules in backend/salon-sang.sql)
 //  • demo: the same rules on pretend data in this browser tab, so the flow can be tried before the
@@ -66,6 +67,7 @@ const Live = {
   async saveService(s) { const c = await sb(); const { id, ...rest } = s; return unwrap(id ? await c.from('services').update(rest).eq('id', id).select().single() : await c.from('services').insert(rest).select().single()); },
   async clients(q) { return unwrap(await (await sb()).rpc('owner_clients', { p_q: q || '' })); },
   async setup() { return unwrap(await (await sb()).rpc('owner_setup')); },
+  async testAlert() { return unwrap(await (await sb()).rpc('owner_test_alert')); },
   async templatePreview(tpl, start) { return unwrap(await (await sb()).rpc('template_preview', { p_tpl: tpl, p_start: start ? start.toISOString() : null })); },
   // ---- portal: taxes (receipts + notes, photos in the private 'receipts' bucket)
   async receipts(fromDay, toDay) { return unwrap(await (await sb()).from('receipts').select('*').gte('day', fromDay).lt('day', toDay).order('day', { ascending: false }).order('id', { ascending: false })); },
@@ -138,7 +140,7 @@ function demoState() {
   const today = ymd();
   const s = {
     settings: { id: 1, booking_open: true, tz: TZ, slot_step_min: 15,
-      week_hours: { 1: ['09:30', '17:00'], 2: ['09:30', '17:00'], 3: ['09:30', '17:00'], 4: ['09:30', '17:00'], 5: ['09:30', '17:00'], 6: ['10:00', '17:00'] }, buffer_min: 0, min_notice_min: 120, max_days_ahead: 60, remind_hours_before: 4, remind_earliest: '08:00:00',
+      week_hours: { 1: ['09:30', '17:00'], 2: ['09:30', '17:00'], 3: ['09:30', '17:00'], 4: ['09:30', '17:00'], 5: ['09:30', '17:00'], 6: ['10:00', '17:00'] }, holidays: [...DEFAULT_HOLIDAYS], buffer_min: 0, min_notice_min: 120, max_days_ahead: 60, remind_hours_before: 4, remind_earliest: '08:00:00',
       confirm_template: "Hi {first}! 💅 You're all booked at Salon Sang: {service}, {when}. Sola Salon Studios, Suite 12 (440 W 6th Ave). Can't wait to see you! ✨ Need to change it? Just reply or call 530-648-4977 💖",
       reminder_template: "Good morning, {first}! ✨ Today's the big day: your {service} with Sang is at {time}. Salon Sang · Sola Salon Studios, Suite 12. Can't wait to pamper you! Need to change it? Reply or call 530-648-4977 💖",
       reminder_template_pm: "Hi {first}! ✨ Just a sweet reminder: your {service} with Sang is today at {time}. Salon Sang · Sola Salon Studios, Suite 12. See you soon! 💅 Need to change it? Reply or call 530-648-4977 💖" },
@@ -194,7 +196,7 @@ function demoFree(s, mins, from, to) {
   const earliest = Date.now() + s.settings.min_notice_min * 60e3;
   const wins = [...s.openings];
   for (let d = ymd(new Date(from - 864e5)); at(d).getTime() <= to + 864e5; d = addDays(d, 1)) {
-    const h = s.settings.week_hours?.[weekday(d)]; if (h) wins.push({ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString() });
+    const h = s.settings.week_hours?.[weekday(d)]; if (h && !holidayName(d, s.settings.holidays)) wins.push({ starts_at: at(d, h[0]).toISOString(), ends_at: at(d, h[1]).toISOString() });
   }
   for (const o of wins) {
     const os = new Date(o.starts_at).getTime(), oe = new Date(o.ends_at).getTime();
@@ -266,7 +268,8 @@ const Demo = {
   async clients(q) { const s = st(); const m = new Map(); s.appointments.slice().sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at)).forEach(a => {
       if (!a.client_phone || m.has(a.client_phone)) return; if (q && !a.client_name.toLowerCase().includes(q.toLowerCase()) && !a.client_phone.includes(q.replace(/\D/g, '') || '¤')) return;
       m.set(a.client_phone, { name: a.client_name, phone: a.client_phone, last_visit: a.starts_at, visits: 1 }); }); return [...m.values()].slice(0, 12); },
-  async setup() { return { phone_token: 'demo-token-1234', ntfy_topic: 'salonsang-demo' }; },
+  async setup() { return { phone_token: 'demo-token-1234', ntfy_topic: 'salonsang-demo', phone_seen_at: null, texts_waiting: 0 }; },
+  async testAlert() { await wait(300); return true; },
   async templatePreview(tpl, start) { const s = st(); return demoRender(s, tpl, { client_name: 'Jessica Rivera', service_name: 'Gel Manicure', addons: [], starts_at: (start || new Date(Date.now() + 5 * 3600e3)).toISOString() }); },
   async receipts(fromDay, toDay) { await wait(120); return st().receipts.filter(r => r.day >= fromDay && r.day < toDay).sort((a, b) => b.day.localeCompare(a.day) || b.id - a.id).map(r => ({ ...r })); },
   async saveReceipt(r) { await wait(200); const s = st(); if (r.id) { const cur = s.receipts.find(x => x.id === r.id); Object.assign(cur, r); return { ...cur }; }
